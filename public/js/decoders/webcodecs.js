@@ -1,26 +1,13 @@
 /**
  * js/decoders/webcodecs.js — 浏览器原生解码(WebCodecs VideoDecoder)。
  *
- * 支持 H.264/H.265/AV1/VP8/VP9。
+ * 支持 H.264/H.265。
  *   - H.264: 由配置包(SPS/PPS)构建 avcC description 与 avc1 codec 字符串
  *   - H.265: 由配置包(VPS/SPS/PPS)构建 hvcC description
- *   - AV1:   从关键帧内的序列头 OBU 推导 av01 codec 字符串(描述符自包含)
- *   - VP8/VP9: 关键帧自包含,无需 description
  */
-import { splitAnnexB, parseSpsH264, buildAvcc, parseSpsH265, buildHvcc, parseAv1CodecFromPacket } from "../../shared/nal.js";
+import { splitAnnexB, parseSpsH264, buildAvcc, parseSpsH265, buildHvcc } from "../../shared/nal.js";
 import { PacketFlags } from "../../../shared/video-stream.js";
 import { createLatestFrameRenderer } from "../render-throttle.js";
-
-const AV1_CANDIDATES = [
-  "av01.0.08M.08",
-  "av01.0.04M.08",
-  "av01.0.08M.10",
-  "av01.0.04M.10",
-  "av01.1.08M.08",
-  "av01.1.04M.08",
-  "av01.2.08M.08",
-  "av01.2.04M.08",
-];
 
 /** 判断数据是否为 Annex-B 格式(start code 开头) */
 function isAnnexB(data) {
@@ -86,7 +73,6 @@ export class WebCodecsDecoder {
     this.codecString = null;
     this.lastTs = -1;
     this.tsOffset = 0;
-    this.av1Idx = 0;
     this.destroyed = false;
     this.pendingConfig = null;
     // 渲染节流:只渲染最新帧(丢中间帧),保证网页操作延迟正常
@@ -109,9 +95,6 @@ export class WebCodecsDecoder {
     const candidates = {
       h264: ["avc1.42E01F", "avc1.64001F"],
       h265: ["hvc1.1.6.L93.B0", "hev1.1.6.L93.B0"],
-      av1: ["av01.0.08M.08"],
-      vp8: ["vp8"],
-      vp9: ["vp09.00.10.08"],
     }[codec];
     if (!candidates) return false;
     for (const c of candidates) {
@@ -129,19 +112,8 @@ export class WebCodecsDecoder {
     this.destroyed = false;
     this.meta = meta;
     this._resizeCanvas(meta.width, meta.height);
-    if (meta.codec === "h264" || meta.codec === "h265") {
-      // 等配置包提供 description
-      this.configArmed = false;
-    } else if (meta.codec === "av1") {
-      this.av1Idx = 0;
-      this._createDecoder({ codec: AV1_CANDIDATES[0], optimizeForLatency: true });
-      this.configArmed = true;
-    } else {
-      // vp8 / vp9
-      const codec = meta.codec === "vp9" ? "vp09.00.10.08" : "vp8";
-      this._createDecoder({ codec, optimizeForLatency: true });
-      this.configArmed = true;
-    }
+    // h264/h265 等配置包提供 description(avcC/hvcC)
+    this.configArmed = false;
     // 补处理在 init 前到达的 config 包
     if (this.pendingConfig) {
       const data = this.pendingConfig;
@@ -153,7 +125,6 @@ export class WebCodecsDecoder {
   _handleConfig(data, codec) {
     if (codec === "h264") this._handleConfigH264(data);
     else if (codec === "h265") this._handleConfigH265(data);
-    else if (codec === "av1") this._handleConfigAv1(data);
   }
 
   _resizeCanvas(w, h) {
@@ -196,12 +167,6 @@ export class WebCodecsDecoder {
   }
 
   _onDecoderError(e) {
-    if (this.meta && this.meta.codec === "av1" && this.av1Idx < AV1_CANDIDATES.length - 1) {
-      this.av1Idx++;
-      this._createDecoder({ codec: AV1_CANDIDATES[this.av1Idx], optimizeForLatency: true });
-      this.onInfo("AV1 codec 字符串调整:" + AV1_CANDIDATES[this.av1Idx]);
-      return;
-    }
     // 浏览器/系统不支持当前编码的 WebCodecs 解码(如 H.265 无硬件、H.264 无专有 codec)
     this.configArmed = false;
     try {
@@ -260,16 +225,6 @@ export class WebCodecsDecoder {
     this.configArmed = true;
   }
 
-  _handleConfigAv1(data) {
-    const parsed = parseAv1CodecFromPacket(data);
-    if (!parsed) return;
-    if (parsed.codec !== this.codecString) {
-      this.codecString = parsed.codec;
-      this._createDecoder({ codec: parsed.codec, optimizeForLatency: true });
-      this.configArmed = true;
-    }
-  }
-
   _nextTs(pts) {
     if (Number.isFinite(pts) && pts >= 0) {
       if (pts >= this.lastTs) {
@@ -306,7 +261,7 @@ export class WebCodecsDecoder {
     // 若第一帧被标为 delta,WebCodecs 解码器会直接报错
     const isKey = (flags & PacketFlags.KEY_FRAME) !== 0 || containsIdr(data, codec);
     const type = isKey ? "key" : "delta";
-    // h264/h265 有 avcC/hvcC description,chunk 需为 AVCC 格式;vp8/vp9/av1 自包含
+    // h264/h265 有 avcC/hvcC description,chunk 需为 AVCC 格式
     const chunkData = codec === "h264" || codec === "h265" ? annexBToAvcc(data) : data;
     try {
       this.decoder.decode(new EncodedVideoChunk({ type, timestamp: ts, data: chunkData }));

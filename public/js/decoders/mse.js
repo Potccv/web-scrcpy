@@ -24,13 +24,6 @@ export class MseDecoder {
     // H.264 所有主流浏览器都支持;H.265 仅 Safari/Edge(Chromium 部分平台);
     // 其余编码交给 MSE 是否支持
     if (codec === "h264" || codec === "h265") return true;
-    if (codec === "vp8" || codec === "vp9" || codec === "av1") {
-      try {
-        return MediaSource.isTypeSupported('video/mp4; codecs="' + codec + '"');
-      } catch {
-        return false;
-      }
-    }
     return false;
   }
 

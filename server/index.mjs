@@ -165,7 +165,6 @@ async function startSessionForClient(client, params) {
     codecOptions = "",
   } = params;
   if (!serial) throw new Error("缺少设备序列号");
-  if (codec === "avi") throw new Error("AVI 是容器格式而非视频编码,串流请选择 H.264/H.265/AV1/VP8/VP9");
 
   client.meta = { codec: null, width: null, height: null, deviceName: null };
   const s = new ScrcpySession({
@@ -223,7 +222,7 @@ async function restartSessionForClient(client, patch) {
     // 用户手动调整码率档位:重置码率控制目标
     initRateControl(client, { target: patch.bitrate, cap: patch.bitrate });
   }
-  if (patch.codec !== undefined && patch.codec !== "avi") {
+  if (patch.codec !== undefined) {
     s.setParams({ codecOptions: withCbr(patch.codec, patch.codecOptions !== undefined ? patch.codecOptions : s.params.codecOptions) });
   }
   client.meta = { codec: null, width: null, height: null, deviceName: null };

@@ -2,7 +2,7 @@
  * shared/video-stream.js — scrcpy 视频 socket 帧格式的增量解析器。
  *
  * 字节布局(与 scrcpy 4.x Streamer.java / demuxer.c 核对):
- *   1) 4 字节 codec id(ASCII:"h264"/"h265"/"av1"/"vp8"/"vp9";0=流被禁用;1=配置错误)
+ *   1) 4 字节 codec id(ASCII:"h264"/"h265";0=流被禁用;1=配置错误)
  *   2) 视频流随后是 12 字节 session 头:[0x80.. flags 4B][width 4B BE][height 4B BE]
  *      (flags 最高位为 session 标记,bit0 表示 client_resized)
  *   3) 之后重复:12 字节帧头:[pts+flags 8B BE][payload size 4B BE] + payload
@@ -15,13 +15,6 @@ import { read32be, read64beBig } from "./protocol.js";
 export const CODEC_ID = {
   H264: 0x68323634, // "h264"
   H265: 0x68323635, // "h265"
-  AV1: 0x00617631, // "\0av1"
-  VP8: 0x00767038, // "\0vp8"
-  VP9: 0x00767039, // "\0vp9"
-  OPUS: 0x6f707573, // "opus"
-  AAC: 0x00616163, // "\0aac"
-  FLAC: 0x666c6163, // "flac"
-  RAW: 0x00726177, // "\0raw"
 };
 
 export function codecIdToString(id) {
@@ -46,15 +39,13 @@ export const PacketFlags = {
 /** WS 二进制消息的流类型(第一个字节) */
 export const StreamType = {
   VIDEO: 0,
-  AUDIO: 1,
 };
 
 /**
- * 增量解析视频/音频 socket 数据。用法:
+ * 增量解析视频 socket 数据。用法:
  *   const p = new VideoStreamParser({ hasSessionHeader: true, onCodecId, onSession, onPacket, onError });
  *   p.push(chunk); // 可多次调用
- *
- * hasSessionHeader=false 时用于音频流(无 12 字节 session 头)。
+ * hasSessionHeader=false 时用于无 12 字节 session 头的数据(如音频,已不使用)。
  */
 export class VideoStreamParser {
   constructor({ hasSessionHeader = true, onCodecId, onSession, onPacket, onError }) {
