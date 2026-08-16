@@ -113,7 +113,31 @@ PORT=8090 npm start       # 自定义端口
 
 同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
 
-**生产部署**(建议):systemd 服务 + nginx 反向代理 + HTTPS。
+### 安装 adb(必需)
+
+项目**依赖 `adb`**(Android Platform Tools)执行设备连接、推送 scrcpy 服务器、建立隧道等操作,服务器上必须安装并加入 PATH:
+
+**Ubuntu/Debian**(简单,但系统源版本可能较旧):
+
+```bash
+apt install -y android-tools-adb
+adb version   # 验证
+```
+
+**官方 Platform Tools**(推荐,版本最新):
+
+```bash
+# 从 https://developer.android.com/tools/releases/platform-tools 下载 linux 版
+unzip platform-tools-latest-linux.zip -d /opt
+ln -s /opt/platform-tools/adb /usr/local/bin/adb
+adb version   # 验证
+```
+
+如 adb 不在 PATH(例如 systemd 服务的 PATH 较精简),可用 `ADB_PATH` 环境变量指定完整路径:
+
+```ini
+Environment=ADB_PATH=/opt/platform-tools/adb
+```
 
 ### 环境变量
 
@@ -122,6 +146,8 @@ PORT=8090 npm start       # 自定义端口
 | `PORT` | `8080` | HTTP/WS 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `ADB_PATH` | `adb`(PATH 中) | adb 可执行文件路径(可选) |
+
+**生产部署**(建议):systemd 服务 + nginx 反向代理 + HTTPS,见下文。
 
 ### systemd 服务示例
 
