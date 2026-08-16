@@ -124,6 +124,13 @@ apt install -y android-tools-adb
 adb version   # 验证
 ```
 
+**Alpine Linux**:
+
+```bash
+apk add android-tools
+adb version   # 验证
+```
+
 **官方 Platform Tools**(推荐,版本最新):
 
 ```bash
@@ -175,6 +182,45 @@ WantedBy=multi-user.target
 systemctl daemon-reload
 systemctl enable --now wsscrcpy
 ```
+
+### Alpine Linux(OpenRC)服务示例
+
+Alpine 默认使用 **OpenRC**(无 systemd)。先安装依赖:
+
+```bash
+apk add nodejs npm android-tools nginx
+```
+
+OpenRC 服务脚本 `/etc/init.d/wsscrcpy`:
+
+```sh
+#!/sbin/openrc-run
+
+name="Web Scrcpy"
+command="/usr/bin/node"
+command_args="/opt/wsscrcpy/server/index.mjs"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/wsscrcpy.log"
+error_log="/var/log/wsscrcpy.log"
+
+: "${PORT:=8090}"
+export PORT
+
+depend() {
+    need net
+}
+```
+
+```bash
+chmod +x /etc/init.d/wsscrcpy
+rc-update add wsscrcpy default
+rc-service wsscrcpy start
+rc-service wsscrcpy status
+```
+
+> nginx 在 Alpine 上配置文件位于 `/etc/nginx/http.d/`(或 `/etc/nginx/nginx.conf`),
+> 反向代理配置与上方 nginx 章节相同。
 
 ### nginx 反向代理(HTTPS + WebSocket)
 
