@@ -108,7 +108,6 @@ npm start            # 默认 0.0.0.0:8080
 ```bash
 npm install
 npm start                 # 默认监听 0.0.0.0:8080
-PORT=8090 npm start       # 自定义端口
 ```
 
 同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
@@ -158,7 +157,7 @@ Environment=ADB_PATH=/opt/platform-tools/adb
 
 ### systemd 服务示例
 
-`/etc/systemd/system/wsscrcpy.service`:
+`/etc/systemd/system/web-scrcpy.service`:
 
 ```ini
 [Unit]
@@ -168,9 +167,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/wsscrcpy
+WorkingDirectory=/opt/web-scrcpy
 ExecStart=/usr/bin/node server/index.mjs
-Environment=PORT=8090
 Restart=always
 RestartSec=3
 
@@ -180,7 +178,7 @@ WantedBy=multi-user.target
 
 ```bash
 systemctl daemon-reload
-systemctl enable --now wsscrcpy
+systemctl enable --now web-scrcpy
 ```
 
 ### Alpine Linux(OpenRC)服务示例
@@ -191,20 +189,20 @@ Alpine 默认使用 **OpenRC**(无 systemd)。先安装依赖:
 apk add nodejs npm android-tools nginx
 ```
 
-OpenRC 服务脚本 `/etc/init.d/wsscrcpy`:
+OpenRC 服务脚本 `/etc/init.d/web-scrcpy`:
 
 ```sh
 #!/sbin/openrc-run
 
 name="Web Scrcpy"
 command="/usr/bin/node"
-command_args="/opt/wsscrcpy/server/index.mjs"
+command_args="/opt/web-scrcpy/server/index.mjs"
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
-output_log="/var/log/wsscrcpy.log"
-error_log="/var/log/wsscrcpy.log"
+output_log="/var/log/web-scrcpy.log"
+error_log="/var/log/web-scrcpy.log"
 
-: "${PORT:=8090}"
+: "${PORT:=8080}"
 export PORT
 
 depend() {
@@ -213,10 +211,10 @@ depend() {
 ```
 
 ```bash
-chmod +x /etc/init.d/wsscrcpy
-rc-update add wsscrcpy default
-rc-service wsscrcpy start
-rc-service wsscrcpy status
+chmod +x /etc/init.d/web-scrcpy
+rc-update add web-scrcpy default
+rc-service web-scrcpy start
+rc-service web-scrcpy status
 ```
 
 > nginx 在 Alpine 上配置文件位于 `/etc/nginx/http.d/`(或 `/etc/nginx/nginx.conf`),
@@ -241,7 +239,7 @@ server {
     ssl_certificate_key     /path/example.key;
 
     location / {
-        proxy_pass http://127.0.0.1:8090;
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
