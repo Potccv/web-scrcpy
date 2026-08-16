@@ -112,6 +112,13 @@ apt install -y nodejs npm git
 node -v    # 验证 Node ≥ 18
 ```
 
+**系统源 Node 版本过旧时**,用官方源升级(仅 Debian/Ubuntu):
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+```
+
 **Alpine Linux**:
 
 ```bash
@@ -119,12 +126,6 @@ apk add nodejs npm git
 node -v    # 验证 Node ≥ 18
 ```
 
-**系统源 Node 版本过旧时**,用官方源升级(仅 Debian/Ubuntu):
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt install -y nodejs
-```
 
 ### 安装 adb(必需)
 
@@ -144,23 +145,6 @@ apk add android-tools
 adb version   # 验证
 ```
 
-### 运行方式
-
-**开发 / 局域网直连**(最简单):
-
-```bash
-# 1. 拉取项目(私人仓库需已认证 git 凭据)
-git clone https://github.com/Potccv/web-scrcpy.git
-cd web-scrcpy
-
-# 2. 安装依赖并启动
-npm install
-npm start                 # 默认监听 0.0.0.0:8080
-PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
-```
-
-同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
-
 **官方 Platform Tools**(推荐,版本最新):
 
 ```bash
@@ -175,6 +159,24 @@ adb version   # 验证
 ```ini
 Environment=ADB_PATH=/opt/platform-tools/adb
 ```
+
+### 运行方式
+
+**开发 / 局域网直连**(最简单):
+
+```bash
+# 1. 拉取项目
+git clone https://github.com/Potccv/web-scrcpy.git
+cd web-scrcpy
+
+# 2. 安装依赖并启动
+npm install
+npm start                 # 默认监听 0.0.0.0:8080
+PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
+```
+
+同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
+
 
 ### 环境变量
 
@@ -214,11 +216,7 @@ systemctl enable --now web-scrcpy
 
 ### Alpine Linux(OpenRC)服务示例
 
-Alpine 默认使用 **OpenRC**(无 systemd)。先安装依赖:
-
-```bash
-apk add nodejs npm android-tools nginx
-```
+Alpine 默认使用 **OpenRC**(无 systemd)。
 
 OpenRC 服务脚本 `/etc/init.d/web-scrcpy`:
 
@@ -233,8 +231,6 @@ pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/web-scrcpy.log"
 error_log="/var/log/web-scrcpy.log"
 
-: "${PORT:=8080}"
-export PORT
 
 depend() {
     need net
@@ -248,8 +244,9 @@ rc-service web-scrcpy start
 rc-service web-scrcpy status
 ```
 
-> nginx 在 Alpine 上配置文件位于 `/etc/nginx/http.d/`(或 `/etc/nginx/nginx.conf`),
-> 反向代理配置与上方 nginx 章节相同。
+> nginx 在 Debian/Ubuntu 上配置文件位于 `/etc/nginx/sites-available/`(或 `/etc/nginx/nginx.conf`);
+> nginx 在 Alpine 上配置文件位于 `/etc/nginx/http.d/`(或 `/etc/nginx/nginx.conf`)
+
 
 ### nginx 反向代理(HTTPS + WebSocket)
 
@@ -395,3 +392,4 @@ npm test   # 30 个测试:协议字节级编码、视频帧解析、SPS 解析�
 - 本项目基于 scrcpy 的开源协议实现(scrcpy 4.x,MPL-2.0),服务端复用官方
   `scrcpy-server.jar`;前端解码器 Broadway(MIT)与 jmuxer(MIT)。
 - 仅建议在可信局域网内使用,服务未内置鉴权。
+- 本项目由DeepSeekv4Flash0731全权开发
