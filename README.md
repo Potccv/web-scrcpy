@@ -126,18 +126,6 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt install -y nodejs
 ```
 
-### 运行方式
-
-**开发 / 局域网直连**(最简单):
-
-```bash
-npm install
-npm start                 # 默认监听 0.0.0.0:8080
-PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
-```
-
-同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
-
 ### 安装 adb(必需)
 
 项目**依赖 `adb`**(Android Platform Tools)执行设备连接、推送 scrcpy 服务器、建立隧道等操作,服务器上必须安装并加入 PATH:
@@ -155,6 +143,23 @@ adb version   # 验证
 apk add android-tools
 adb version   # 验证
 ```
+
+### 运行方式
+
+**开发 / 局域网直连**(最简单):
+
+```bash
+# 1. 拉取项目(私人仓库需已认证 git 凭据)
+git clone https://github.com/Potccv/web-scrcpy.git
+cd web-scrcpy
+
+# 2. 安装依赖并启动
+npm install
+npm start                 # 默认监听 0.0.0.0:8080
+PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
+```
+
+同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
 
 **官方 Platform Tools**(推荐,版本最新):
 
