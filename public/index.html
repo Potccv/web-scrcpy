@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web Scrcpy — 浏览器串流控制安卓设备</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <script>
+    // Broadway 解码器通过相对路径 fetch('avc.wasm'),此处无需配置;
+    // avc.wasm 已复制到站点根目录以便其加载(见 tools/fetch-vendors.mjs)
+  </script>
+  <script src="/vendor/broadway/Decoder.js"></script>
+  <script src="/vendor/stream.js"></script>
+  <script src="/vendor/jmuxer.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📱</span>
+      <span class="title">Web Scrcpy</span>
+    </div>
+    <div class="toolbar-group">
+      <div class="toolbar">
+        <button id="stats-toggle" title="统计面板 (Ctrl+Shift+i)">📊 统计</button>
+        <button id="help-toggle" title="快捷键帮助 (Ctrl+Shift+h)">❓ 帮助</button>
+        <button id="rotate" title="设备旋转 (Ctrl+Shift+r)">🔄 旋转</button>
+        <button id="back" title="返回键 (Ctrl+Shift+b)">⬅ 返回</button>
+        <button id="home" title="Home (Ctrl+Shift+Home)">🏠 主页</button>
+        <button id="app-switch" title="最近任务 (Ctrl+Shift+End)">🗂 最近任务</button>
+        <button id="vol-down" title="设备音量- (Ctrl+Shift+↓)">🔉 音量-</button>
+        <button id="vol-up" title="设备音量+ (Ctrl+Shift+↑)">🔊 音量+</button>
+        <button id="record" title="服务端录制:输出 MP4,编码与串流一致">⏺ 录制</button>
+        <button id="record-local" title="浏览器录制:直接录画面,停止即下载(编码由浏览器决定)">🎬 本机录屏</button>
+        <button id="get-clipboard" title="同步设备剪贴板">📋 剪贴板</button>
+        <button id="screenshot" title="截图 (Ctrl+Shift+s)">📸 截图</button>
+        <button id="fullscreen" title="全屏 (Ctrl+Shift+f)">⛶ 全屏</button>
+      </div>
+      <div class="themebar">
+        <button id="theme-mode" class="theme-switch mode-switch" title="切换亮/暗主题">
+          <span class="check">
+            <span class="icon">
+              <svg class="icon-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="3.1"/><path d="M8 0.8v2.4M8 12.8v2.4M0.8 8h2.4M12.8 8h2.4M3 3l1.7 1.7M11.3 11.3 13 13M13 3l-1.7 1.7M4.7 11.3 3 13"/></svg>
+              <svg class="icon-moon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 9.4A6 6 0 0 1 6.6 2.4 6.2 6.2 0 1 0 13.6 9.4z"/></svg>
+            </span>
+          </span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <section class="panel">
+        <h3>设备连接</h3>
+        <div class="row">
+          <input id="connect-host" placeholder="手机 IP(局域网)" />
+          <input id="connect-port" placeholder="5555" value="5555" size="5" />
+          <button id="connect-btn">连接</button>
+        </div>
+        <div class="row">
+          <div id="device-list" class="device-list" title="已通过 adb 连接的设备"></div>
+        </div>
+        <div class="row">
+          <button id="refresh-devices" title="刷新设备列表">⟳ 刷新</button>
+          <button id="disconnect-btn" title="断开当前选中的设备">断开</button>
+          <button id="rename-btn" title="给当前设备命名(别名保存在本机)">✏️ 改名</button>
+        </div>
+        <p class="hint">手机需开启「无线调试」(Android 11+)或先 USB 连接执行 <code>adb tcpip 5555</code>;模拟器自动出现在列表。</p>
+      </section>
+
+      <section class="panel">
+        <h3>串流设置</h3>
+        <label>编码格式
+          <select id="codec-select"></select>
+        </label>
+        <label>解码方式
+          <select id="decoder-select"></select>
+        </label>
+        <div id="probe-result" class="probe-result"></div>
+        <button id="probe-btn" title="检测当前浏览器的解码能力">🔍 检测解码能力</button>
+        <label>码率档位
+          <select id="bitrate-select"></select>
+          <input id="custom-bitrate" type="number" min="0.1" step="0.1" placeholder="Mbps,如 6" style="display:none" />
+          <button id="apply-bitrate" style="display:none">应用</button>
+        </label>
+        <label>最大分辨率
+          <select id="size-select"></select>
+        </label>
+        <label>帧率上限
+          <select id="fps-select"></select>
+        </label>
+        <div class="row">
+          <button id="start-btn" class="primary">▶ 开始串流</button>
+          <button id="stop-btn" class="danger" disabled>⏹ 停止</button>
+        </div>
+        <p class="hint">运行中修改编码/码率/分辨率会自动重启串流(约1~2秒)。</p>
+      </section>
+
+      <section class="panel log-panel">
+        <h3>运行日志</h3>
+        <div id="log-box" class="log">-</div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div id="viewport" class="viewport">
+        <canvas id="screen-canvas" class="screen"></canvas>
+        <video id="screen-video" class="screen" autoplay muted playsinline style="display:none"></video>
+        <div id="stats-overlay" class="overlay stats-overlay"></div>
+        <div id="help-overlay" class="overlay help-overlay">
+          <h3>⌨️ 快捷键(MOD = Ctrl+Shift / Cmd+Shift)</h3>
+          <ul id="hotkey-list"></ul>
+          <p class="hint">普通按键将直接转发到设备;Esc 关闭面板。</p>
+        </div>
+        <div id="empty-tip" class="empty-tip">选择设备并点击「开始串流」</div>
+      </div>
+      <footer class="statusbar" id="status-bar">
+        <span class="state-badge" id="status-state">空闲</span>
+        <span>设备:<b id="status-device">-</b></span>
+        <span>编码:<b id="status-codec">-</b></span>
+        <span>码率:<b id="status-bitrate">-</b></span>
+        <span>解码:<b id="status-decoder">-</b></span>
+      </footer>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

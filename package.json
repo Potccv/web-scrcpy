@@ -1,0 +1,18 @@
+{
+  "name": "wsscrcpy",
+  "version": "1.0.0",
+  "description": "Web 版 scrcpy:在浏览器中通过局域网串流并控制 Android 手机/模拟器,支持多编码格式、浏览器原生解码 + 自定义 JS 解码、实时统计与码率档位",
+  "type": "module",
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "fetch": "node tools/fetch-scrcpy-server.mjs && node tools/fetch-vendors.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
