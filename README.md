@@ -101,6 +101,31 @@ npm start            # 默认 0.0.0.0:8080
 
 ## 部署指南
 
+### 安装系统依赖(Linux)
+
+需要:**Node.js ≥ 18**(含 npm)、**adb**(见下文「安装 adb」)、`git`(可选,用于拉取代码)。
+
+**Ubuntu/Debian**:
+
+```bash
+apt install -y nodejs npm git
+node -v    # 验证 Node ≥ 18
+```
+
+**Alpine Linux**:
+
+```bash
+apk add nodejs npm git
+node -v    # 验证 Node ≥ 18
+```
+
+**系统源 Node 版本过旧时**,用官方源升级(仅 Debian/Ubuntu):
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+```
+
 ### 运行方式
 
 **开发 / 局域网直连**(最简单):
@@ -108,6 +133,7 @@ npm start            # 默认 0.0.0.0:8080
 ```bash
 npm install
 npm start                 # 默认监听 0.0.0.0:8080
+PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
 ```
 
 同一局域网的其他设备访问 `http://<本机IP>:端口` 即可(手机配好 adb 无线调试)。
