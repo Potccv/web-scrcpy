@@ -6,16 +6,18 @@
  * 转换为 fMP4 并送入 MediaSource。
  */
 export class MseDecoder {
-  constructor({ videoEl, onFrame, onError, onInfo }) {
+  constructor({ videoEl, onFrame, onError, onInfo, onFrameDrop }) {
     this.videoEl = videoEl;
     this.onFrame = onFrame;
     this.onError = onError;
     this.onInfo = onInfo;
+      this.onFrameDrop = onFrameDrop;
     this.jmuxer = null;
     this.meta = null;
     this.destroyed = false;
     this._rafHandle = null;
     this._lastFrameTime = 0;
+      this._lastFeedAt = null;
   }
 
   static supported(codec) {
@@ -73,7 +75,8 @@ export class MseDecoder {
       const tick = () => {
         if (this.destroyed) return;
         this._rafHandle = this.videoEl.requestVideoFrameCallback(tick);
-        this.onFrame();
+        const decodeMs = this._lastFeedAt !== null ? performance.now() - this._lastFeedAt : undefined;
+        this.onFrame({ decodeMs });
       };
       this._rafHandle = this.videoEl.requestVideoFrameCallback(tick);
     } else {
@@ -84,7 +87,8 @@ export class MseDecoder {
         const now = performance.now();
         if (this.videoEl.readyState >= 2 && now - this._lastFrameTime > 30) {
           this._lastFrameTime = now;
-          this.onFrame();
+          const decodeMs = this._lastFeedAt !== null ? performance.now() - this._lastFeedAt : undefined;
+          this.onFrame({ decodeMs });
         }
       };
       requestAnimationFrame(raf);
@@ -104,6 +108,7 @@ export class MseDecoder {
       }
     }
     this._lastArrive = now;
+      this._lastFeedAt = now;
     if (!this._ready) {
       // MediaSource 尚未就绪:缓存数据,onReady 后补喂(避免丢关键帧)
       this._pending.push(data);

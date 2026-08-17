@@ -9,15 +9,23 @@
  *   const render = createLatestFrameRenderer((frame) => { ...绘制... }, { closeFrame });
  *   render(frame); // 可高频调用,内部只保留最新一帧
  */
-export function createLatestFrameRenderer(renderFn, { closeFrame } = {}) {
+export function createLatestFrameRenderer(renderFn, { closeFrame, onDrop } = {}) {
   let latest = null;
   let scheduled = false;
   return (frame) => {
-    if (latest !== null && closeFrame) {
-      // 丢弃被替换的旧帧(如 VideoFrame 需 close 释放资源)
-      try {
-        closeFrame(latest);
-      } catch {}
+    if (latest !== null) {
+      // 被替换的旧帧尚未渲染即被丢弃,计入丢帧统计
+      if (onDrop) {
+        try {
+          onDrop();
+        } catch {}
+      }
+      if (closeFrame) {
+        // 释放被替换的旧帧(如 VideoFrame 需 close 释放资源)
+        try {
+          closeFrame(latest);
+        } catch {}
+      }
     }
     latest = frame;
     if (scheduled) return;

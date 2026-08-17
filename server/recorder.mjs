@@ -14,7 +14,14 @@ import { Mp4Recorder } from "../shared/mp4-muxer.mjs";
 import { splitAnnexB, hevcNalType } from "../shared/nal.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const RECORDINGS_DIR = path.join(__dirname, "..", "tmp", "recordings");
+export let RECORDINGS_DIR = path.join(__dirname, "..", "tmp", "recordings");
+
+/** 允许通过配置文件修改录制目录(调用后立即生效,目录会自动创建) */
+export function setRecordingsDir(dir) {
+  if (!dir) return;
+  RECORDINGS_DIR = path.resolve(dir);
+  ensureRecordingsDir();
+}
 
 export function ensureRecordingsDir() {
   fs.mkdirSync(RECORDINGS_DIR, { recursive: true });

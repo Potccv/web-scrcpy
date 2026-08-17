@@ -60,12 +60,13 @@ function containsIdr(data, codec) {
 }
 
 export class WebCodecsDecoder {
-  constructor({ canvas, onFrame, onError, onInfo }) {
+  constructor({ canvas, onFrame, onError, onInfo, onFrameDrop }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d", { alpha: false });
     this.onFrame = onFrame;
     this.onError = onError;
     this.onInfo = onInfo;
+      this.onFrameDrop = onFrameDrop;
     this.decoder = null;
     this.meta = null;
     this.configArmed = false;
@@ -75,6 +76,8 @@ export class WebCodecsDecoder {
     this.tsOffset = 0;
     this.destroyed = false;
     this.pendingConfig = null;
+    this.videoColorSpace = null;
+    this._decodeStartByTs = new Map();
     // 渲染节流:只渲染最新帧(丢中间帧),保证网页操作延迟正常
     this._renderer = createLatestFrameRenderer(
       (frame) => {
@@ -83,10 +86,16 @@ export class WebCodecsDecoder {
         } catch {
           // 尺寸变化瞬间可能失败,忽略
         }
+          const ts = frame && frame.timestamp;
+          let decodeMs;
+          if (ts !== undefined && ts !== null && this._decodeStartByTs.has(ts)) {
+            decodeMs = performance.now() - this._decodeStartByTs.get(ts);
+            this._decodeStartByTs.delete(ts);
+          }
         frame.close();
-        this.onFrame();
+        this.onFrame({ decodeMs });
       },
-      { closeFrame: (f) => { try { f.close(); } catch {} } }
+      { closeFrame: (f) => { try { f.close(); } catch {} }, onDrop: this.onFrameDrop }
     );
   }
 
@@ -147,7 +156,9 @@ export class WebCodecsDecoder {
     });
     this.decoder = decoder;
     try {
-      decoder.configure({ ...config, hardwareAcceleration: "no-preference" });
+      const cfg = { ...config, hardwareAcceleration: "no-preference" };
+        if (config.colorSpace) cfg.colorSpace = config.colorSpace;
+        decoder.configure(cfg);
     } catch (e) {
       this.decoder = null;
       this.onError(
@@ -163,6 +174,25 @@ export class WebCodecsDecoder {
       frame.close();
       return;
     }
+      // 部分浏览器不会从 HEVC 码流中继承 BT.709/limited range 元数据,
+      // 导致输出 VideoFrame 被当作 BT.601/full range 渲染而泛白。
+      // 这里按 H.265 的常见配置补一份颜色空间(无法包装时继续使用原帧)。
+      if (this.videoColorSpace && frame && typeof VideoFrame === "function") {
+        try {
+          const cs = frame.colorSpace;
+          if (!cs || cs.matrix !== this.videoColorSpace.matrix || cs.fullRange === true) {
+            const wrapped = new VideoFrame(frame, {
+              timestamp: frame.timestamp,
+              duration: frame.duration,
+              colorSpace: this.videoColorSpace,
+            });
+            frame.close();
+            frame = wrapped;
+          }
+        } catch {
+          // 当前浏览器不支持在 VideoFrame 构造时覆盖 colorSpace,保留原帧
+        }
+      }
     this._renderer(frame);
   }
 
@@ -199,7 +229,8 @@ export class WebCodecsDecoder {
     this.cfgKey = key;
     this.codecString = info.codec;
     this._resizeCanvas(info.width, info.height);
-    this._createDecoder({ codec: info.codec, description: avcc, optimizeForLatency: true });
+    this.videoColorSpace = null; // H.264 按码流自身元数据,不强制覆盖
+      this._createDecoder({ codec: info.codec, description: avcc, optimizeForLatency: true, colorSpace: this.videoColorSpace });
     this.configArmed = true;
   }
 
@@ -221,7 +252,8 @@ export class WebCodecsDecoder {
     if (key === this.cfgKey) return;
     this.cfgKey = key;
     this.codecString = info.codec;
-    this._createDecoder({ codec: info.codec, description: hvcc, optimizeForLatency: true });
+    this.videoColorSpace = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
+      this._createDecoder({ codec: info.codec, description: hvcc, optimizeForLatency: true, colorSpace: this.videoColorSpace });
     this.configArmed = true;
   }
 
@@ -264,7 +296,12 @@ export class WebCodecsDecoder {
     // h264/h265 有 avcC/hvcC description,chunk 需为 AVCC 格式
     const chunkData = codec === "h264" || codec === "h265" ? annexBToAvcc(data) : data;
     try {
-      this.decoder.decode(new EncodedVideoChunk({ type, timestamp: ts, data: chunkData }));
+      this._decodeStartByTs.set(ts, performance.now());
+        if (this._decodeStartByTs.size > 200) {
+          const oldest = this._decodeStartByTs.keys().next().value;
+          this._decodeStartByTs.delete(oldest);
+        }
+        this.decoder.decode(new EncodedVideoChunk({ type, timestamp: ts, data: chunkData }));
     } catch (e) {
       this.onError("WebCodecs 解码调用失败:" + e.message);
     }
@@ -272,6 +309,7 @@ export class WebCodecsDecoder {
 
   destroy() {
     this.destroyed = true;
+      if (this._decodeStartByTs) this._decodeStartByTs.clear();
     if (this.decoder) {
       try {
         this.decoder.close();

@@ -21,15 +21,22 @@ export class Stats {
     this._packets = 0;
     this._totalBytes = 0;
     this._framesInWindow = 0;
+      this._droppedInWindow = 0;
+      this._renderedTotal = 0;
     this._windowStart = performance.now();
     this._rateBps = 0;
     this.rtt = null;
     this.rttLast = null;
     this.meta = { codec: null, width: null, height: null, deviceName: null };
     this.decoderName = null;
+      
     this.codecOptions = "";
     this.targetBitrate = null;
-    this.lastUpdate = 0;
+    this.decodeLatency = null;
+      
+      this.droppedFrames = 0;
+      this.decodeErrors = 0;
+      this.lastUpdate = 0;
   }
 
   /** 设置目标码率档位(用于对比实际传输速率) */
@@ -47,9 +54,32 @@ export class Stats {
     this._packets++;
   }
 
-  addFrame() {
+  addFrame(info = {}) {
+      info = info || {};
     this._framesInWindow++;
+      this._renderedTotal++;
+      if (info.decodeMs !== undefined && Number.isFinite(info.decodeMs)) {
+        this.decodeLatency = Math.round(info.decodeMs);
+          
+      }
   }
+
+    addDroppedFrame() {
+      
+      this.droppedFrames++;
+    }
+
+    addDecodeError() {
+      this.decodeErrors++;
+    }
+
+      _removed(ms) {
+    
+        if (false) {
+      
+        
+      }
+    }
 
   setMeta(meta) {
     Object.assign(this.meta, meta);
@@ -73,14 +103,20 @@ export class Stats {
 
     const bytes = this._bytes;
     this._bytes = 0;
-    const instBps = dt > 0 ? (bytes * 8 * 1000) / dt : 0;
+    const instBps = dt > 0 ? (bytes * 8 * 1000) / dt : 0 /* keep */;
     this._rateBps = this._rateBps === 0 ? instBps : this._rateBps * 0.7 + instBps * 0.3;
 
     const fps = (this._framesInWindow * 1000) / Math.max(dt, 1);
+      const totalFrames = this._renderedTotal + this.droppedFrames;
+      const dropRate = totalFrames > 0 ? (this.droppedFrames / totalFrames) * 100 : 0 /* keep */;
+        
+          
+          
     this._framesInWindow = 0;
+      this._droppedInWindow = 0;
     this._windowStart = now;
 
-    this._render(fps);
+    this._render(fps, dropRate);
   }
 
   _fmtRate(bps) {
@@ -95,7 +131,7 @@ export class Stats {
     return n + " B";
   }
 
-  _render(fps) {
+  _render(fps, dropRate = 0) {
     const m = this.meta;
     const lines = [];
     if (m.deviceName) lines.push(["设备", m.deviceName]);
@@ -107,6 +143,13 @@ export class Stats {
     lines.push(["目标码率", this.targetBitrate ? this._fmtRate(this.targetBitrate) : "-"]);
     lines.push(["接收总量", this._packets + " 包 / " + this._fmtBytes(this._totalBytes)]);
     lines.push(["端到端延迟", this.rtt !== null ? this.rtt + " ms" : "-"]);
+      lines.push(["解码延迟", this.decodeLatency !== null ? this.decodeLatency + " ms" : "-"]);
+      
+      
+      
+      lines.push(["丢帧数", String(this.droppedFrames)]);
+      lines.push(["丢帧率", dropRate > 0 ? dropRate.toFixed(1) + "%" : "0%"]);
+      lines.push(["解码失败", String(this.decodeErrors)]);
 
     let html = "";
     for (const [k, v] of lines) {

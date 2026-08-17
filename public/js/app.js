@@ -45,6 +45,7 @@ class App {
     this._lastToast = null;
     this._lastPts = 0;
     this.status = null;
+      this.configDefaults = null;
 
     this.stats = new Stats($("stats-overlay"));
     this.input = new InputController({
@@ -61,6 +62,7 @@ class App {
   async init() {
     this._cacheDom();
     this._buildSelects();
+      await this._loadConfigDefaults();
     this._bindUi();
     this.input.attach($("screen-canvas"), $("screen-video"));
     this._setupHotkeys();
@@ -74,6 +76,41 @@ class App {
     await this.refreshStatus();
     this.refreshDevices();
   }
+
+    /** 从服务端配置读取默认串流参数(码率/分辨率/帧率/编码) */
+    async _loadConfigDefaults() {
+      try {
+        const res = await fetch("/api/config");
+        if (!res.ok) return;
+        const cfg = await res.json();
+        this.configDefaults = cfg;
+        if (cfg.defaultCodec && this.dom.codecSelect.querySelector(`option[value="${cfg.defaultCodec}"]`)) {
+          this.dom.codecSelect.value = cfg.defaultCodec;
+        }
+        if (cfg.defaultBitrate) {
+          const opt = this.dom.bitrateSelect.querySelector(`option[value="${cfg.defaultBitrate}"]`);
+          if (opt) {
+            this.dom.bitrateSelect.value = String(cfg.defaultBitrate);
+          } else {
+            this.dom.bitrateSelect.value = "custom";
+            this.dom.customBitrate.value = (cfg.defaultBitrate / 1_000_000).toFixed(1);
+            this.dom.customBitrate.style.display = "inline-block";
+            this.dom.applyBitrateBtn.style.display = "inline-block";
+          }
+        }
+        if (cfg.defaultMaxSize !== undefined) {
+          const opt = this.dom.sizeSelect.querySelector(`option[value="${cfg.defaultMaxSize}"]`);
+          if (opt) this.dom.sizeSelect.value = String(cfg.defaultMaxSize);
+        }
+        if (cfg.defaultMaxFps !== undefined) {
+          const opt = this.dom.fpsSelect.querySelector(`option[value="${cfg.defaultMaxFps}"]`);
+          if (opt) this.dom.fpsSelect.value = String(cfg.defaultMaxFps);
+        }
+        if (cfg.logLevel) this._log("服务端配置已加载: logLevel=" + cfg.logLevel);
+      } catch (e) {
+        // 配置接口不可用不影响前端启动
+      }
+    }
 
   _cacheDom() {
     this.dom = {
@@ -340,6 +377,9 @@ class App {
         this._log(msg.level === "error" || msg.level === "warn" ? "⚠ " + msg.message : msg.message);
         if (msg.level === "warn") this._toast(msg.message, 6000);
         break;
+        
+          
+          break;
       default:
         break;
     }
@@ -402,9 +442,13 @@ class App {
         codec,
         canvas: this.dom.canvas,
         videoEl: this.dom.videoEl,
-        onFrame: () => this.stats.addFrame(),
-        onError: (m) => this._toast("解码器错误:" + m, 6000),
+        onFrame: (info) => this.stats.addFrame(info || {}),
+        onError: (m) => {
+            this.stats.addDecodeError();
+            this._toast("解码器错误:" + m, 6000);
+          },
         onInfo: (m) => this._toast(m, 3000),
+          onFrameDrop: () => this.stats.addDroppedFrame(),
       });
       await this.decoder.init({ codec, width, height });
       const label = this.decoderId === "custom-js" ? customJsDecoderLabel(codec) : decoderLabel(this.decoderId);

@@ -16,25 +16,28 @@ function isKeyNal(type) {
 }
 
 export class Libde265Decoder {
-  constructor({ canvas, onFrame, onError, onInfo }) {
+  constructor({ canvas, onFrame, onError, onInfo, onFrameDrop }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d", { alpha: false });
     this.onFrame = onFrame;
     this.onError = onError;
     this.onInfo = onInfo;
+      this.onFrameDrop = onFrameDrop;
     this.worker = null;
     this.meta = null;
+      this._decodeId = 0;
+      this._pendingDecodeAt = new Map();
     this.destroyed = false;
     // 渲染节流:只渲染最新帧
-    this._renderer = createLatestFrameRenderer(({ rgba, w, h }) => {
+    this._renderer = createLatestFrameRenderer(({ rgba, w, h, decodeMs }) => {
       this._resizeCanvas(w, h);
       try {
         this.ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
       } catch {
         // 画布尺寸瞬间不匹配,忽略本帧
       }
-      this.onFrame();
-    });
+      this.onFrame({ decodeMs });
+    }, { onDrop: this.onFrameDrop });
   }
 
   static supported(codec) {
@@ -106,14 +109,25 @@ export class Libde265Decoder {
       off += part.length;
     }
     const buf = merged.buffer;
-    this.worker.postMessage({ type: "nals", data: buf, count: parts.length, keyframe: hasKey }, [buf]);
+    const decodeId = ++this._decodeId;
+      this._pendingDecodeAt.set(decodeId, performance.now());
+      if (this._pendingDecodeAt.size > 120) {
+        const oldest = this._pendingDecodeAt.keys().next().value;
+        this._pendingDecodeAt.delete(oldest);
+      }
+      this.worker.postMessage({ type: "nals", data: buf, count: parts.length, keyframe: hasKey, id: decodeId }, [buf]);
   }
 
   _onWorkerMessage(msg) {
     if (this.destroyed) return;
     switch (msg.type) {
       case "frame":
-        this._renderer({ rgba: new Uint8ClampedArray(msg.rgba), w: msg.width, h: msg.height });
+        let decodeMs;
+          if (msg.decodeId && this._pendingDecodeAt.has(msg.decodeId)) {
+            decodeMs = performance.now() - this._pendingDecodeAt.get(msg.decodeId);
+            this._pendingDecodeAt.delete(msg.decodeId);
+          }
+          this._renderer({ rgba: new Uint8ClampedArray(msg.rgba), w: msg.width, h: msg.height, decodeMs });
         break;
       case "error":
         this.onError && this.onError(msg.message);
@@ -125,6 +139,7 @@ export class Libde265Decoder {
 
   destroy() {
     this.destroyed = true;
+    if (this._pendingDecodeAt) this._pendingDecodeAt.clear();
     if (this.worker) {
       try {
         this.worker.postMessage({ type: "destroy" });

@@ -19,6 +19,7 @@ let decoder = null;
 let decoderReady = false;
 let nalQueue = []; // {data: Uint8Array, keyframe: boolean}
 let queuedBytes = 0;
+let currentDecodeId = 0;
 let waitingForKey = false;
 let pumping = false;
 
@@ -43,7 +44,8 @@ self.onmessage = async (e) => {
     }
     case "nals": {
       const buf = new Uint8Array(msg.data);
-      const count = msg.count || 0;
+      currentDecodeId = msg.id || 0;
+        const count = msg.count || 0;
       let off = 0;
       for (let i = 0; i < count && off + 4 <= buf.length; i++) {
         const len = (buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3];
@@ -147,15 +149,18 @@ function drain() {
 }
 
 // YUV→RGB 查表(在 worker 中完成,主线程只负责 putImageData,减主线程负载)
+// H.265(HEVC)通常使用 BT.709 色域 + limited range(16~235):
+// 若按 full-range BT.601 换算,黑电平会被抬升、对比度降低,导致画面泛白。
+const Y_SCALE = 255 / 219;
 const CR = new Int16Array(256);
 const CB = new Int16Array(256);
 const CGU = new Int16Array(256);
 const CGV = new Int16Array(256);
 for (let i = 0; i < 256; i++) {
-  CR[i] = Math.round(1.402 * (i - 128));
-  CB[i] = Math.round(1.772 * (i - 128));
-  CGU[i] = Math.round(0.344136 * (i - 128));
-  CGV[i] = Math.round(0.714136 * (i - 128));
+  CR[i] = Math.round(1.5748 * (i - 128)); // BT.709 Cr
+  CB[i] = Math.round(1.8556 * (i - 128)); // BT.709 Cb
+  CGU[i] = Math.round(0.1873 * (i - 128)); // BT.709 Cb→G
+  CGV[i] = Math.round(0.4681 * (i - 128)); // BT.709 Cr→G
 }
 
 function postFrame(image) {
@@ -180,14 +185,14 @@ function postFrame(image) {
         const Y = yb[yRow + i];
         const U = ub[uRow + (i >> 1)];
         const V = vb[vRow + (i >> 1)];
-        rgba[o] = clamp(Y + CR[V]);
-        rgba[o + 1] = clamp(Y - CGU[U] - CGV[V]);
-        rgba[o + 2] = clamp(Y + CB[U]);
+        rgba[o] = clamp(Math.round((Y - 16) * Y_SCALE + CR[V]));
+        rgba[o + 1] = clamp(Math.round((Y - 16) * Y_SCALE - CGU[U] - CGV[V]));
+        rgba[o + 2] = clamp(Math.round((Y - 16) * Y_SCALE + CB[U]));
         rgba[o + 3] = 255;
         o += 4;
       }
     }
-    self.postMessage({ type: "frame", width: w, height: h, rgba: rgba.buffer }, [rgba.buffer]);
+    self.postMessage({ type: "frame", width: w, height: h, rgba: rgba.buffer, decodeId: currentDecodeId }, [rgba.buffer]);
   } catch {
     // 取帧/转换失败忽略
   }

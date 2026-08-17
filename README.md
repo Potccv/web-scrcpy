@@ -10,7 +10,7 @@
 | 1. 通过 Web 连接局域网安卓手机/模拟器 | 服务端封装 `adb`:`adb devices` 列表、`adb connect ip:port` 无线连接、模拟器自动识别;浏览器页面通过 WebSocket 接收视频流、发送控制指令 |
 | 2. 可选视频编码格式 | H.264 / H.265(HEVC)可选,下拉切换,运行中可热切换(重启编码器) |
 | 3. 浏览器原生解码 + 自定义 JS 解码 | 解码器注册表:`WebCodecs`(原生)、`MediaSource+jmuxer`(原生回退)、**自定义 JS/WASM 解码**:H.264 → Broadway(纯 JS),H.265 → libde265(WASM),均不依赖浏览器原生解码;支持「自动选择」与手动指定 |
-| 4. 按键展示帧数/传输速率等 | `Ctrl+Shift+i`(Mac:`Cmd+Shift+i`)呼出统计面板:解码帧率、传输速率(kbps/Mbps)、接收包数/总量、端到端延迟(RTT)、分辨率、编码格式、解码器;`Ctrl+Shift+h` 查看全部快捷键 |
+| 4. 按键展示帧数/传输速率等 | `Ctrl+Shift+i`(Mac:`Cmd+Shift+i`)呼出统计面板:解码帧率、传输速率(kbps/Mbps)、接收包数/总量、端到端延迟(RTT)、解码延迟、丢帧数/率、分辨率、编码格式、解码器;`Ctrl+Shift+h` 查看全部快捷键 |
 | 5. 标准码率档位 + 自定义码率 | 预设 1 / 2 / 4 / 8 / 16 Mbps 五档(快捷键 `Ctrl+Shift+1~5`),另有自定义码率输入框(`Ctrl+Shift+0` 聚焦),运行中即时生效 |
 | 6. 多人在线 | 每个浏览器标签页是独立客户端,服务端按 WebSocket 连接隔离会话,可同时多人各自串流不同设备/参数 |
 | 7. 码率严格限制 | H.264/H.265 强制 CBR(bitrate-mode=2),编码器在超码率时自动降低量化质量;桥端实时统计实际码率,持续超过档位时**自动下调编码目标码率(降画质)**,有余量再恢复 |
@@ -185,6 +185,56 @@ PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
 | `PORT` | `8080` | HTTP/WS 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `ADB_PATH` | `adb`(PATH 中) | adb 可执行文件路径(可选) |
+| `CONFIG_PATH` | `config.json` | 自定义配置文件路径(可选) |
+
+
+### 配置文件
+
+`npm start` 会自动读取配置:
+
+- `config.default.json` — 内置默认配置(可直接修改,或作为参考)
+- `config.json` — 用户覆盖配置(不存在时仅使用默认配置)
+- 环境变量 `PORT` / `HOST` 优先级高于配置文件;`CONFIG_PATH` 可指定自定义配置文件路径。
+
+支持字段:
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `port` | `8080` | HTTP/WS 监听端口 |
+| `host` | `0.0.0.0` | 监听地址 |
+| `defaultCodec` | `h264` | 默认编码格式:`h264` / `h265` |
+| `defaultBitrate` | `2000000` | 默认码率(单位 bps,如 2 Mbps = `2000000`) |
+| `defaultMaxSize` | `0` | 默认最大分辨率,`0` 表示原始分辨率 |
+| `defaultMaxFps` | `0` | 默认帧率上限,`0` 表示不限制 |
+| `logLevel` | `info` | 日志级别:`debug` / `info` / `warn` / `error` |
+| `recordingDir` | `tmp/recordings` | 录制文件保存目录(相对项目根目录或绝对路径) |
+| `recordingMaxAgeDays` | `7` | 录制文件保留天数,超过后自动清理 |
+| `recordingMaxTotalBytes` | `2147483648` | 录制文件总大小上限(字节),超过后删除最旧文件 |
+| `recordingDiskFreeWarnBytes` | `1073741824` | 磁盘剩余空间低于该值(字节)时向在线客户端告警 |
+| `recordingDiskFreeMinBytes` | `314572800` | 磁盘剩余空间低于该值(字节)时拒绝开始新录制 |
+| `recordingCleanupIntervalHours` | `6` | 录制文件自动清理间隔(小时) |
+
+示例:
+
+```json
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "defaultCodec": "h264",
+  "defaultBitrate": 4000000,
+  "defaultMaxSize": 1280,
+  "defaultMaxFps": 60,
+  "logLevel": "info",
+  "recordingDir": "tmp/recordings",
+    "recordingMaxAgeDays": 7,
+    "recordingMaxTotalBytes": 2147483648,
+    "recordingDiskFreeWarnBytes": 1073741824,
+    "recordingDiskFreeMinBytes": 314572800,
+    "recordingCleanupIntervalHours": 6
+}
+```
+
+配置加载失败或字段非法时会回退默认值,不会影响启动。
 
 **生产部署**(建议):systemd 服务 + nginx 反向代理 + HTTPS,见下文。
 
@@ -287,9 +337,9 @@ server {
 ### 录制文件管理
 
 - 服务端录制输出到 `tmp/recordings/`(已 gitignore),浏览器下载后文件仍保留在服务器。
-- **自动清理**:文件保留 **7 天**,总量超 **2GB** 时删除最旧的;服务启动、每次录制结束、每 6 小时各清理一次。
-- **磁盘保护**:剩余空间 < 1GB 时向所有在线客户端发送警告;剩余 < 300MB 时拒绝开始新录制。
-- 调整策略:修改 `server/recorder.mjs` 的 `cleanupRecordings()` 参数与 `server/index.mjs` 的阈值。
+- **自动清理**:默认文件保留 **7 天**,总量超 **2GB** 时删除最旧的;服务启动、每次录制结束、按配置间隔(默认 6 小时)各清理一次。
+- **磁盘保护**:默认剩余空间 < 1GB 时向所有在线客户端发送警告;剩余 < 300MB 时拒绝开始新录制。
+- 调整策略:可通过 `config.json` 配置 `recordingMaxAgeDays`、`recordingMaxTotalBytes`、`recordingDiskFreeWarnBytes`、`recordingDiskFreeMinBytes`、`recordingCleanupIntervalHours` 等参数。
 
 ### 常见部署问题
 
@@ -350,6 +400,7 @@ server {
 
 ```
 bin/                    scrcpy-server.jar + 版本号(fetch 脚本生成)
+config.default.json       内置默认配置(可修改)
 shared/                 服务端/浏览器共享的协议模块(控制消息、视频帧解析)
 server/                 Node.js 桥:index(HTTP/WS/多客户端)、adb、session(会话)
 public/                 前端

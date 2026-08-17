@@ -18,7 +18,7 @@ import { ScrcpySession } from "./session.mjs";
 import * as adb from "./adb.mjs";
 import { decodeDeviceMessage, encodeGetClipboard } from "../shared/protocol.js";
 import { StreamType, PacketFlags } from "../shared/video-stream.js";
-import { SessionRecorder, RECORDINGS_DIR, getDiskFree, cleanupRecordings } from "./recorder.mjs";
+import { SessionRecorder, RECORDINGS_DIR, setRecordingsDir, getDiskFree, cleanupRecordings } from "./recorder.mjs";
 import { splitAnnexB } from "../shared/nal.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,8 +27,132 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const SHARED_DIR = path.join(ROOT, "shared");
 const BIN_DIR = path.join(ROOT, "bin");
 
-const PORT = Number(process.env.PORT || 8080);
-const HOST = process.env.HOST || "0.0.0.0";
+// ---------------------------------------------------------------------------
+// 配置加载:config.default.json 提供默认值,config.json 可覆盖;
+// 环境变量(PORT/HOST/ADB_PATH)优先级高于配置文件。
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CONFIG = {
+  port: 8080,
+  host: "0.0.0.0",
+  defaultCodec: "h264",
+  defaultBitrate: 2_000_000,
+  defaultMaxSize: 0,
+  defaultMaxFps: 0,
+  logLevel: "info",
+  recordingDir: "tmp/recordings",
+    recordingMaxAgeDays: 7,
+    recordingMaxTotalBytes: 2 * 1024 ** 3,
+    recordingDiskFreeWarnBytes: 1 * 1024 ** 3,
+    recordingDiskFreeMinBytes: 300 * 1024 ** 2,
+    recordingCleanupIntervalHours: 6,
+};
+
+const CONFIG_PATH = process.env.CONFIG_PATH || path.join(ROOT, "config.json");
+const DEFAULT_CONFIG_PATH = path.join(ROOT, "config.default.json");
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    if (fs.existsSync(filePath)) {
+      console.warn(`[config] 配置文件解析失败,已忽略:${filePath}`);
+    }
+    return null;
+  }
+}
+
+function normalizeConfig(raw, source = "config") {
+  if (!raw || typeof raw !== "object") return {};
+  const cfg = {};
+  const invalid = (key) => console.warn(`[config] ${source} 字段 ${key} 非法,已回退默认值`);
+  if (raw.port !== undefined) {
+    if (Number.isInteger(raw.port) && raw.port >= 1 && raw.port <= 65535) cfg.port = raw.port;
+    else invalid("port");
+  }
+  if (raw.host !== undefined) {
+    if (typeof raw.host === "string" && raw.host.trim()) cfg.host = raw.host.trim();
+    else invalid("host");
+  }
+  if (raw.defaultCodec !== undefined) {
+    if (raw.defaultCodec === "h264" || raw.defaultCodec === "h265") cfg.defaultCodec = raw.defaultCodec;
+    else invalid("defaultCodec");
+  }
+  if (raw.defaultBitrate !== undefined) {
+    if (Number.isFinite(raw.defaultBitrate) && raw.defaultBitrate > 0) cfg.defaultBitrate = Math.round(raw.defaultBitrate);
+    else invalid("defaultBitrate");
+  }
+  if (raw.defaultMaxSize !== undefined) {
+    if (Number.isInteger(raw.defaultMaxSize) && raw.defaultMaxSize >= 0) cfg.defaultMaxSize = raw.defaultMaxSize;
+    else invalid("defaultMaxSize");
+  }
+  if (raw.defaultMaxFps !== undefined) {
+    if (Number.isInteger(raw.defaultMaxFps) && raw.defaultMaxFps >= 0) cfg.defaultMaxFps = raw.defaultMaxFps;
+    else invalid("defaultMaxFps");
+  }
+  if (raw.logLevel !== undefined) {
+    if (["debug", "info", "warn", "error"].includes(raw.logLevel)) cfg.logLevel = raw.logLevel;
+    else invalid("logLevel");
+  }
+  if (raw.recordingDir !== undefined) {
+    if (typeof raw.recordingDir === "string" && raw.recordingDir.trim()) cfg.recordingDir = raw.recordingDir.trim();
+    else invalid("recordingDir");
+  }
+    if (raw.recordingMaxAgeDays !== undefined) {
+      if (Number.isFinite(raw.recordingMaxAgeDays) && raw.recordingMaxAgeDays > 0) cfg.recordingMaxAgeDays = raw.recordingMaxAgeDays;
+      else invalid("recordingMaxAgeDays");
+    }
+    if (raw.recordingMaxTotalBytes !== undefined) {
+      if (Number.isFinite(raw.recordingMaxTotalBytes) && raw.recordingMaxTotalBytes > 0) cfg.recordingMaxTotalBytes = Math.round(raw.recordingMaxTotalBytes);
+      else invalid("recordingMaxTotalBytes");
+    }
+    if (raw.recordingDiskFreeWarnBytes !== undefined) {
+      if (Number.isFinite(raw.recordingDiskFreeWarnBytes) && raw.recordingDiskFreeWarnBytes >= 0) cfg.recordingDiskFreeWarnBytes = Math.round(raw.recordingDiskFreeWarnBytes);
+      else invalid("recordingDiskFreeWarnBytes");
+    }
+    if (raw.recordingDiskFreeMinBytes !== undefined) {
+      if (Number.isFinite(raw.recordingDiskFreeMinBytes) && raw.recordingDiskFreeMinBytes >= 0) cfg.recordingDiskFreeMinBytes = Math.round(raw.recordingDiskFreeMinBytes);
+      else invalid("recordingDiskFreeMinBytes");
+    }
+    if (raw.recordingCleanupIntervalHours !== undefined) {
+      if (Number.isFinite(raw.recordingCleanupIntervalHours) && raw.recordingCleanupIntervalHours > 0) cfg.recordingCleanupIntervalHours = raw.recordingCleanupIntervalHours;
+      else invalid("recordingCleanupIntervalHours");
+    }
+  return cfg;
+}
+
+function loadConfig() {
+  const defaults = { ...DEFAULT_CONFIG, ...normalizeConfig(readJsonFile(DEFAULT_CONFIG_PATH), "config.default.json") };
+  const user = readJsonFile(CONFIG_PATH);
+  const config = { ...defaults, ...normalizeConfig(user, "config.json") };
+  if (user === null && process.env.CONFIG_PATH && !fs.existsSync(CONFIG_PATH)) {
+    console.warn(`[config] 指定的配置文件不存在:${CONFIG_PATH},使用默认配置`);
+  }
+  return config;
+}
+
+const config = loadConfig();
+
+if (config.recordingDir) {
+  try {
+    setRecordingsDir(path.isAbsolute(config.recordingDir) ? config.recordingDir : path.join(ROOT, config.recordingDir));
+  } catch (e) {
+    console.warn(`[config] 录制目录不可用,已回退默认目录:${e.message}`);
+    try {
+      setRecordingsDir(path.join(ROOT, "tmp", "recordings"));
+    } catch {}
+  }
+}
+
+const PORT = Number(process.env.PORT || config.port || 8080);
+const HOST = process.env.HOST || config.host || "0.0.0.0";
+const LOG_LEVEL = config.logLevel || "info";
+
+const RECORDING_MAX_AGE_MS = (config.recordingMaxAgeDays || 7) * 86400e3;
+const RECORDING_MAX_TOTAL_BYTES = config.recordingMaxTotalBytes || (2 * 1024 ** 3);
+const RECORDING_DISK_WARN_BYTES = config.recordingDiskFreeWarnBytes ?? (1 * 1024 ** 3);
+const RECORDING_DISK_MIN_BYTES = config.recordingDiskFreeMinBytes ?? (300 * 1024 ** 2);
+const RECORDING_CLEANUP_INTERVAL_MS = (config.recordingCleanupIntervalHours || 6) * 3600e3;
 
 function readServerVersion() {
   try {
@@ -158,16 +282,16 @@ async function startSessionForClient(client, params) {
   await client.stopPromise; // 等待上一次停止完成
   const {
     serial,
-    codec = "h264",
-    bitrate = 8_000_000,
-    maxSize = 0,
-    maxFps = 0,
+    codec = config.defaultCodec || "h264",
+    bitrate = config.defaultBitrate || 8_000_000,
+    maxSize = config.defaultMaxSize ?? 0,
+    maxFps = config.defaultMaxFps ?? 0,
     codecOptions = "",
   } = params;
   if (!serial) throw new Error("缺少设备序列号");
 
   client.meta = { codec: null, width: null, height: null, deviceName: null };
-  const s = new ScrcpySession({
+      const s = new ScrcpySession({
     serial,
     version: SERVER_VERSION,
     codec,
@@ -197,7 +321,7 @@ async function stopSessionForClient(client) {
     client.recording = null;
   }
   client.meta = { codec: null, width: null, height: null, deviceName: null };
-  client.stopPromise = s ? s.stop().catch(() => {}) : Promise.resolve();
+      client.stopPromise = s ? s.stop().catch(() => {}) : Promise.resolve();
   await client.stopPromise;
   sendJson(client.ws, { type: "state", state: "stopped" });
 }
@@ -226,7 +350,7 @@ async function restartSessionForClient(client, patch) {
     s.setParams({ codecOptions: withCbr(patch.codec, patch.codecOptions !== undefined ? patch.codecOptions : s.params.codecOptions) });
   }
   client.meta = { codec: null, width: null, height: null, deviceName: null };
-  sendJson(client.ws, { type: "state", state: "restarting", ...clientSessionStatus(client) });
+      sendJson(client.ws, { type: "state", state: "restarting", ...clientSessionStatus(client) });
   try {
     await s.start();
   } catch (err) {
@@ -341,16 +465,16 @@ function checkRateLimits() {
 setInterval(checkRateLimits, 2000);
 
 // ---------------------------------------------------------------------------
-// 录制文件维护:启动清理一次 + 每 6 小时定时清理;磁盘空间不足时提醒
+// 录制文件维护:启动清理一次 + 按配置间隔定时清理;磁盘空间不足时提醒
 // ---------------------------------------------------------------------------
 
-cleanupRecordings();
+cleanupRecordings({ maxAgeMs: RECORDING_MAX_AGE_MS, maxTotalBytes: RECORDING_MAX_TOTAL_BYTES });
 setInterval(() => {
-  const r = cleanupRecordings();
+  const r = cleanupRecordings({ maxAgeMs: RECORDING_MAX_AGE_MS, maxTotalBytes: RECORDING_MAX_TOTAL_BYTES });
   if (r.deleted.length) {
     console.log(`[recordings] 已清理 ${r.deleted.length} 个过期录制文件`);
   }
-}, 6 * 3600e3);
+}, RECORDING_CLEANUP_INTERVAL_MS);
 
 // 磁盘空间低时向所有在线客户端发送提醒(有节流,避免刷屏)
 let lastDiskWarnAt = 0;
@@ -358,7 +482,7 @@ setInterval(() => {
   const now = Date.now();
   if (now - lastDiskWarnAt < 10 * 60e3) return; // 10 分钟一次
   const disk = getDiskFree();
-  if (disk.free < 1024 ** 3) {
+  if (disk.free < RECORDING_DISK_WARN_BYTES) {
     lastDiskWarnAt = now;
     const msg = `磁盘剩余空间不足:${(disk.free / 1024 ** 3).toFixed(2)}GB,录制文件可能无法保存`;
     console.log("[recordings]", msg);
@@ -381,6 +505,7 @@ function handleSessionEvent(client, evt) {
       sendJson(ws, { type: "meta", ...client.meta });
       break;
     case "packet": {
+        
       if (ws && ws.readyState === WebSocket.OPEN) {
         const buf = Buffer.allocUnsafe(2 + evt.data.length);
         buf[0] = StreamType.VIDEO;
@@ -424,14 +549,14 @@ function handleSessionEvent(client, evt) {
       sendJson(ws, { type: "connected", deviceName: evt.deviceName });
       break;
     case "disconnected":
-      sendJson(ws, { type: "disconnected", reason: evt.reason });
+              sendJson(ws, { type: "disconnected", reason: evt.reason });
       break;
     case "processExit": {
       const logs = client.session && client.session.serverLogs ? client.session.serverLogs : [];
       const errLines = logs.filter((l) => /error|exception/i.test(l)).slice(-2);
       const tail = (errLines.length ? errLines : logs.slice(-3)).join(" | ");
       const reason = `设备端服务器异常退出(code=${evt.code})${tail ? ":" + tail : ""}`;
-      sendJson(ws, { type: "error", message: reason });
+              sendJson(ws, { type: "error", message: reason });
       sendJson(ws, { type: "disconnected", reason });
       if (client.session && client.session.childExited) {
         client.session = null;
@@ -461,9 +586,9 @@ async function handleRecord(client, action) {
     if (!s) throw new Error("请先开始串流");
     if (client.recording) throw new Error("已在录制中");
     if (!client.meta.codec) throw new Error("视频流尚未就绪,请稍候");
-    // 磁盘空间检查:剩余不足 300MB 时拒绝录制,避免录到一半写满磁盘
+    // 磁盘空间检查:剩余低于配置阈值时拒绝录制,避免录到一半写满磁盘
     const disk = getDiskFree();
-    if (disk.free < 300 * 1024 ** 2) {
+    if (disk.free < RECORDING_DISK_MIN_BYTES) {
       throw new Error(`磁盘剩余空间不足(${(disk.free / 1024 ** 2).toFixed(0)}MB),无法开始录制`);
     }
     client.recording = new SessionRecorder({
@@ -533,7 +658,7 @@ async function handleRecord(client, action) {
       }
     }
     // 录制结束后清理过期/超量文件
-    cleanupRecordings();
+    cleanupRecordings({ maxAgeMs: RECORDING_MAX_AGE_MS, maxTotalBytes: RECORDING_MAX_TOTAL_BYTES });
     // 录制期间改过编码参数(i-frame-interval):恢复原参数
     if (client._recBaseCodecOptions !== undefined && client.session) {
       const base = client._recBaseCodecOptions;
@@ -624,6 +749,24 @@ async function handleApi(req, res, url) {
     });
   }
 
+    if (method === "GET" && p === "/api/config") {
+      return sendRes(res, 200, {
+        port: PORT,
+        host: HOST,
+        defaultCodec: config.defaultCodec,
+        defaultBitrate: config.defaultBitrate,
+        defaultMaxSize: config.defaultMaxSize,
+        defaultMaxFps: config.defaultMaxFps,
+        logLevel: LOG_LEVEL,
+        recordingDir: config.recordingDir,
+          recordingMaxAgeDays: config.recordingMaxAgeDays,
+          recordingMaxTotalBytes: config.recordingMaxTotalBytes,
+          recordingDiskFreeWarnBytes: config.recordingDiskFreeWarnBytes,
+          recordingDiskFreeMinBytes: config.recordingDiskFreeMinBytes,
+          recordingCleanupIntervalHours: config.recordingCleanupIntervalHours,
+      });
+    }
+
   if (method === "GET" && p === "/api/devices") {
     const devices = await adb.listDevices();
     return sendRes(res, 200, { devices });
@@ -662,12 +805,14 @@ function setupWebSocket(httpServer) {
       recording: null,
       _opQueue: Promise.resolve(),
       _rateRestartPending: false,
+        
     };
     clients.set(ws, client);
     console.log(`[ws] 客户端已连接(当前 ${clients.size} 个)`);
     sendJson(ws, { type: "ready", clientCount: clients.size });
 
     ws.on("message", (data, isBinary) => {
+        
       if (isBinary) {
         // 原始 scrcpy 控制消息 → 设备
         if (client.session) {

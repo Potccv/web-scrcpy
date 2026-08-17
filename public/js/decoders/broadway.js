@@ -11,19 +11,21 @@ import { splitAnnexB } from "../../shared/nal.js";
 import { createLatestFrameRenderer } from "../render-throttle.js";
 
 export class BroadwayDecoder {
-  constructor({ canvas, onFrame, onError, onInfo }) {
+  constructor({ canvas, onFrame, onError, onInfo, onFrameDrop }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d", { alpha: false });
     this.onFrame = onFrame;
     this.onError = onError;
     this.onInfo = onInfo;
+      this.onFrameDrop = onFrameDrop;
     this.decoder = null;
     this.ready = false;
     this.pending = [];
     this.meta = null;
     this.destroyed = false;
+      this._decodeStart = null;
     // 渲染节流:只渲染最新帧,保证网页操作延迟正常
-    this._renderer = createLatestFrameRenderer(({ buf, w, h }) => {
+    this._renderer = createLatestFrameRenderer(({ buf, w, h, decodeMs }) => {
       this._resizeCanvas(w, h);
       try {
         const img = new ImageData(new Uint8ClampedArray(buf, 0, w * h * 4), w, h);
@@ -31,8 +33,8 @@ export class BroadwayDecoder {
       } catch {
         // 画布尺寸瞬间不匹配,忽略本帧
       }
-      this.onFrame();
-    });
+      this.onFrame({ decodeMs });
+    }, { onDrop: this.onFrameDrop });
   }
 
   static supported(codec) {
@@ -62,7 +64,12 @@ export class BroadwayDecoder {
     this.decoder.onPictureDecoded = (buf, w, h) => {
       if (this.destroyed || !w || !h) return;
       // Broadway rgb 模式输出 RGBA 拷贝,节流渲染最新帧
-      this._renderer({ buf, w, h });
+      let decodeMs;
+        if (this._decodeStart !== null) {
+          decodeMs = performance.now() - this._decodeStart;
+          this._decodeStart = null;
+        }
+        this._renderer({ buf, w, h, decodeMs });
     };
   }
 
@@ -100,7 +107,8 @@ export class BroadwayDecoder {
 
   feedPacket({ flags, data }) {
     if (this.destroyed || !this.decoder) return;
-    const nals = splitAnnexB(data);
+    this._decodeStart = performance.now();
+      const nals = splitAnnexB(data);
     for (const nal of nals) {
       const type = nal.nalType;
       if (type === 9) continue; // AUD
