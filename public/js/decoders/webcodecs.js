@@ -1,9 +1,10 @@
 /**
  * js/decoders/webcodecs.js — 浏览器原生解码(WebCodecs VideoDecoder)。
  *
- * 支持 H.264/H.265。
+ * 支持 H.264/H.265/AV1。
  *   - H.264: 由配置包(SPS/PPS)构建 avcC description 与 avc1 codec 字符串
  *   - H.265: 由配置包(VPS/SPS/PPS)构建 hvcC description
+ *   - AV1: 直接喂 OBU,使用通用 av01 codec 字符串(description 可选)
  */
 import { splitAnnexB, parseSpsH264, buildAvcc, parseSpsH265, buildHvcc } from "../../shared/nal.js";
 import { PacketFlags } from "../../../shared/video-stream.js";
@@ -56,6 +57,7 @@ function containsIdr(data, codec) {
       if (t === 19 || t === 20) return true; // IDR_W_RADL / IDR_N_LP
     }
   }
+  // AV1 的关键帧由服务端 KEY_FRAME 标志提供,这里不做 NAL 检测
   return false;
 }
 
@@ -104,6 +106,7 @@ export class WebCodecsDecoder {
     const candidates = {
       h264: ["avc1.42E01F", "avc1.64001F"],
       h265: ["hvc1.1.6.L93.B0", "hev1.1.6.L93.B0"],
+      av1: ["av01.0.04M.08", "av01.0.08M.08", "av01.0.04M.10"],
     }[codec];
     if (!candidates) return false;
     for (const c of candidates) {
@@ -134,6 +137,7 @@ export class WebCodecsDecoder {
   _handleConfig(data, codec) {
     if (codec === "h264") this._handleConfigH264(data);
     else if (codec === "h265") this._handleConfigH265(data);
+    else if (codec === "av1") this._handleConfigAV1(data);
   }
 
   _resizeCanvas(w, h) {
@@ -206,7 +210,7 @@ export class WebCodecsDecoder {
     this.onError(
       "WebCodecs 无法解码" +
         (this.codecString || "") +
-        ":浏览器/系统不支持该编码的硬件解码,请切换解码方式(如「自定义JS」或「MediaSource」)" +
+        ":浏览器/系统不支持该编码(或当前配置不被接受),请切换解码方式(如「h265web.js」「自定义JS」或「MediaSource」)" +
         (e && e.message ? "(" + e.message + ")" : "")
     );
   }
@@ -257,6 +261,23 @@ export class WebCodecsDecoder {
     this.configArmed = true;
   }
 
+  _handleConfigAV1(data) {
+    // AV1 的 WebCodecs 配置通常不需要 description;如果浏览器要求,可在后续版本
+    // 从 sequence header OBU 构建 AV1CodecConfigurationRecord。
+    // 这里只确保解码器已创建,后续 EncodedVideoChunk 直接喂 OBU。
+    if (!this.decoder) {
+      const codec = "av01.0.04M.08";
+      this.codecString = codec;
+      this._resizeCanvas(this.meta?.width || 0, this.meta?.height || 0);
+      this._createDecoder({
+        codec,
+        optimizeForLatency: true,
+        colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
+      });
+    }
+    this.configArmed = true;
+  }
+
   _nextTs(pts) {
     if (Number.isFinite(pts) && pts >= 0) {
       if (pts >= this.lastTs) {
@@ -293,7 +314,7 @@ export class WebCodecsDecoder {
     // 若第一帧被标为 delta,WebCodecs 解码器会直接报错
     const isKey = (flags & PacketFlags.KEY_FRAME) !== 0 || containsIdr(data, codec);
     const type = isKey ? "key" : "delta";
-    // h264/h265 有 avcC/hvcC description,chunk 需为 AVCC 格式
+    // h264/h265 有 avcC/hvcC description,chunk 需为 AVCC 格式;AV1 直接使用 OBU
     const chunkData = codec === "h264" || codec === "h265" ? annexBToAvcc(data) : data;
     try {
       this._decodeStartByTs.set(ts, performance.now());

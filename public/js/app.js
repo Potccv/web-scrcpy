@@ -7,7 +7,7 @@
  */
 import { CODECS, BITRATE_PRESETS, MAX_SIZE_PRESETS, FPS_PRESETS, encodeGetClipboard } from "../../shared/protocol.js";
 import { StreamType, PacketFlags } from "../../shared/video-stream.js";
-import { resolveDecoder, createDecoder, decoderLabel, DECODER_OPTIONS, customJsDecoderLabel, probeSupport, formatProbeResult, decoderSupports } from "./decoders/index.js";
+import { resolveDecoder, createDecoder, decoderLabel, getDecoderOptions, customJsDecoderLabel, h265webDecoderLabel, probeSupport, formatProbeResult, decoderSupports } from "./decoders/index.js";
 import { Stats } from "./stats.js";
 import { InputController } from "./input.js";
 import { setupHotkeys, HOTKEYS, deviceKeyHandlers } from "./hotkeys.js";
@@ -36,6 +36,7 @@ class App {
     this.applied = { codec: null, width: null, height: null };
     this.decoderId = null;
     this.decoder = null;
+    this.mediaToken = null;
     this.codecOptions = "";
     this.rateLimit = null; // {bitrate, actual}
     this.deviceSerial = ""; // 当前选中的设备(列表形式)
@@ -198,17 +199,29 @@ class App {
       opt.textContent = f.label;
       this.dom.fpsSelect.appendChild(opt);
     }
-    for (const d of DECODER_OPTIONS) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.label;
-      this.dom.decoderSelect.appendChild(opt);
-    }
+    this._buildDecoderOptions();
 
     for (const [k, desc] of HOTKEYS) {
       const li = document.createElement("li");
       li.innerHTML = `<code>${k}</code><span>${desc}</span>`;
       this.dom.hotkeyList.appendChild(li);
+    }
+  }
+
+  /** 根据当前编码格式重建“解码方式”下拉框(每个编码只显示对应的解码项) */
+  _buildDecoderOptions() {
+    const codec = this.dom.codecSelect ? this.dom.codecSelect.value : "h264";
+    const previous = this.dom.decoderSelect.value;
+    this.dom.decoderSelect.innerHTML = "";
+    for (const d of getDecoderOptions(codec)) {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = d.label;
+      this.dom.decoderSelect.appendChild(opt);
+    }
+    // 尽量保留用户之前选择的解码方式;若新编码不支持则回退到第一项(auto)
+    if (previous && [...this.dom.decoderSelect.options].some((o) => o.value === previous)) {
+      this.dom.decoderSelect.value = previous;
     }
   }
 
@@ -333,6 +346,7 @@ class App {
   _onWsJson(msg) {
     switch (msg.type) {
       case "ready":
+        if (msg.mediaToken) this.mediaToken = msg.mediaToken;
         this._log(`已连接服务端(在线客户端 ${msg.clientCount || 1} 个)`);
         break;
       case "state":
@@ -442,6 +456,7 @@ class App {
         codec,
         canvas: this.dom.canvas,
         videoEl: this.dom.videoEl,
+        mediaToken: this.mediaToken,
         onFrame: (info) => this.stats.addFrame(info || {}),
         onError: (m) => {
             this.stats.addDecodeError();
@@ -451,7 +466,11 @@ class App {
           onFrameDrop: () => this.stats.addDroppedFrame(),
       });
       await this.decoder.init({ codec, width, height });
-      const label = this.decoderId === "custom-js" ? customJsDecoderLabel(codec) : decoderLabel(this.decoderId);
+      const label = this.decoderId === "custom-js"
+        ? customJsDecoderLabel(codec)
+        : this.decoderId === "h265web"
+          ? h265webDecoderLabel(codec)
+          : decoderLabel(this.decoderId);
       this.decoderLabel = label;
       this.stats.setDecoder(label + (this.codecOptions ? " (profile=baseline)" : ""));
       this._syncStatusBar();
@@ -568,6 +587,7 @@ class App {
   }
 
   async _onCodecOrDecoderChange() {
+    this._buildDecoderOptions();
     const custom = this.dom.bitrateSelect.value === "custom";
     this.dom.customBitrate.style.display = custom ? "inline-block" : "none";
     this.dom.applyBitrateBtn.style.display = custom ? "inline-block" : "none";
@@ -611,6 +631,7 @@ class App {
     const row = (name, ok) => (ok ? `<span class="ok">✓ ${name}</span>` : `<span class="no">✗ ${name}</span>`);
     const videoRows = [
       "WebCodecs(原生): " + row("可用", probe.webcodecs[codec]),
+      "h265web.js: " + row("可用", probe.h265web[codec]),
       "MediaSource(回退): " + row("可用", probe.mse[codec]),
       "自定义JS/WASM: " + row("可用", probe.customJs[codec]),
     ];

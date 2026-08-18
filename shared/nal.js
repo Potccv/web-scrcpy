@@ -87,6 +87,22 @@ export function hevcNalType(data) {
   return (data[0] >> 1) & 0x3f;
 }
 
+/** 去除 RBSP 的 emulation prevention bytes(0x000003 → 0x0000) */
+export function removeEmulationPrevention(data) {
+  const out = [];
+  let zeros = 0;
+  for (let i = 0; i < data.length; i++) {
+    const b = data[i];
+    if (zeros >= 2 && b === 3) {
+      zeros = 0;
+      continue;
+    }
+    out.push(b);
+    zeros = b === 0 ? zeros + 1 : 0;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // H.264 SPS 解析
 // ---------------------------------------------------------------------------
@@ -215,9 +231,12 @@ export function buildAvcc(sps, pps) {
 // ---------------------------------------------------------------------------
 
 export function parseSpsH265(sps) {
-  const r = new BitReader(sps, 2); // 跳过 2 字节 NAL 头
   const type = (sps[0] >> 1) & 0x3f;
   if (type !== 33) throw new Error("不是 HEVC SPS NAL(type=" + type + ")");
+  // SPS 的 RBSP 中含有 emulation prevention bytes(0x000003),必须先去除,
+  // 否则 profile_tier_level 等字段会错位,导致 levelIdc=0 等错误 codec string。
+  const rbsp = removeEmulationPrevention(sps.subarray(2));
+  const r = new BitReader(rbsp, 0); // 已跳过 2 字节 NAL 头
   r.readBits(4); // sps_video_parameter_set_id
   const maxSubLayersMinus1 = r.readBits(3);
   r.readBits(1); // sps_temporal_id_nesting_flag
@@ -238,6 +257,25 @@ export function parseSpsH265(sps) {
       if (r.readBits(1)) r.readBits(8); // sub_layer_level_idc
     }
   }
+  // 生成 WebCodecs 可识别的 HEVC codec string:
+  //   hvc1.<profile_idc>.<profile_compatibility_flags>.<tier><level>.<constraint bytes>
+  // 示例:hvc1.1.6.L93.B0
+  const compatHex = compatibilityFlags.toString(16).toUpperCase();
+  const c = BigInt(constraintFlags);
+  const constraintBytes = [];
+  for (let i = 5; i >= 0; i--) {
+    constraintBytes.push(Number((c >> BigInt(i * 8)) & 0xffn));
+  }
+  // 去掉尾部全 0 的 constraint 字节,至少保留一个字节
+  while (constraintBytes.length > 1 && constraintBytes[constraintBytes.length - 1] === 0) {
+    constraintBytes.pop();
+  }
+  const constraintStr = constraintBytes
+    .map((b) => b.toString(16).toUpperCase().padStart(2, "0"))
+    .join(".");
+  const codec =
+    "hvc1." + profileIdc + "." + compatHex + "." + (tierFlag ? "H" : "L") + levelIdc + "." + constraintStr;
+
   return {
     profileSpace,
     tierFlag,
@@ -245,7 +283,7 @@ export function parseSpsH265(sps) {
     compatibilityFlags,
     constraintFlags,
     levelIdc,
-    codec: "hvc1." + profileIdc + "." + (tierFlag ? "H" : "L") + "." + levelIdc + ".B0",
+    codec,
   };
 }
 

@@ -593,6 +593,7 @@ export const DEFAULT_BITRATE = 2_000_000;
 export const CODECS = [
   { id: "h264", label: "H.264 (AVC)", scrcpyName: "h264", browserCodec: "avc1", note: "兼容性最好,低延迟" },
   { id: "h265", label: "H.265 (HEVC)", scrcpyName: "h265", browserCodec: "hvc1", note: "同等码率画质更好,需设备与浏览器都支持" },
+  { id: "av1", label: "AV1", scrcpyName: "av1", browserCodec: "av01", note: "压缩率高,需设备编码器与浏览器支持" },
 ];
 
 export function codecById(id) {

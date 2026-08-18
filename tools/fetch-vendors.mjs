@@ -60,6 +60,15 @@ async function main() {
   fs.rmSync(ltmp, { force: true });
   fs.rmSync(ltmpDir, { recursive: true, force: true });
 
+  // h265web.js(H.264/H.265/AV1 播放器,硬解+WASM 软解,https://github.com/numberwolf/h265web.js)
+  const hdir = path.join(VENDOR, "h265web");
+  fs.mkdirSync(hdir, { recursive: true });
+  const H265WEB_BASE = "https://raw.githubusercontent.com/numberwolf/h265web.js/master/static";
+  for (const f of ["h265web.js", "h265web_wasm.js", "h265web_wasm.wasm", "extjs.js", "extwasm.js", "extwasm.wasm"]) {
+    await download(`${H265WEB_BASE}/${f}`, path.join(hdir, f));
+  }
+  console.log("public/vendor/h265web/ (h265web.js 播放器,支持 H.264/H.265/AV1)");
+
   // opus-decoder 已移除:音频采用 QtScrcpy 同款 PCM 直传方案(audio_codec=raw),
   // 播放端自写 s16→f32 转换,不再需要 libopus WASM 解码器。
 }

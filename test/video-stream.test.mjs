@@ -16,7 +16,7 @@ function packetHeader(ptsFlags, size) {
 test("codec id 字符串", () => {
   assert.equal(codecIdToString(0x68323634), "h264");
   assert.equal(codecIdToString(0x68323635), "h265");
-  assert.equal(codecIdToString(0x00617631), null); // AV1 已不支持
+  assert.equal(codecIdToString(0x00617631), "av1"); // scrcpy 的 AV1 codec id("\0av1")
   assert.equal(codecIdToString(0x12345678), null);
 });
 

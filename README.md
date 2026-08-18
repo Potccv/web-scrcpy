@@ -8,8 +8,8 @@
 | 需求 | 实现 |
 | --- | --- |
 | 1. 通过 Web 连接局域网安卓手机/模拟器 | 服务端封装 `adb`:`adb devices` 列表、`adb connect ip:port` 无线连接、模拟器自动识别;浏览器页面通过 WebSocket 接收视频流、发送控制指令 |
-| 2. 可选视频编码格式 | H.264 / H.265(HEVC)可选,下拉切换,运行中可热切换(重启编码器) |
-| 3. 浏览器原生解码 + 自定义 JS 解码 | 解码器注册表:`WebCodecs`(原生)、`MediaSource+jmuxer`(原生回退)、**自定义 JS/WASM 解码**:H.264 → Broadway(纯 JS),H.265 → libde265(WASM),均不依赖浏览器原生解码;支持「自动选择」与手动指定 |
+| 2. 可选视频编码格式 | H.264 / H.265(HEVC)/ AV1 可选,下拉切换,运行中可热切换(重启编码器) |
+| 3. 浏览器原生解码 + 自定义 JS 解码 | 解码器注册表:`WebCodecs`(原生)、`MediaSource+jmuxer`(原生回退)、**h265web.js**(硬解+WASM 软解,H.264/H.265/AV1)、**自定义 JS/WASM 解码**:H.264 → Broadway(纯 JS),H.265 → libde265(WASM),均不依赖浏览器原生解码;支持「自动选择」与手动指定 |
 | 4. 按键展示帧数/传输速率等 | `Ctrl+Shift+i`(Mac:`Cmd+Shift+i`)呼出统计面板:解码帧率、传输速率(kbps/Mbps)、接收包数/总量、端到端延迟(RTT)、解码延迟、丢帧数/率、分辨率、编码格式、解码器;`Ctrl+Shift+h` 查看全部快捷键 |
 | 5. 标准码率档位 + 自定义码率 | 预设 1 / 2 / 4 / 8 / 16 Mbps 五档(快捷键 `Ctrl+Shift+1~5`),另有自定义码率输入框(`Ctrl+Shift+0` 聚焦),运行中即时生效 |
 | 6. 多人在线 | 每个浏览器标签页是独立客户端,服务端按 WebSocket 连接隔离会话,可同时多人各自串流不同设备/参数 |
@@ -53,7 +53,7 @@
 npm install
 
 # 2. (可选)重新下载 scrcpy 服务器与前端资源
-npm run fetch        # 自动下载 scrcpy-server.jar、Broadway、jmuxer
+npm run fetch        # 自动下载 scrcpy-server.jar、Broadway、jmuxer、libde265、h265web
 
 # 3. 启动
 npm start            # 默认 0.0.0.0:8080
@@ -202,7 +202,7 @@ PORT=xxxx npm start       # 自定义端口(xxxx 替换为实际端口)
 | --- | --- | --- |
 | `port` | `8080` | HTTP/WS 监听端口 |
 | `host` | `0.0.0.0` | 监听地址 |
-| `defaultCodec` | `h264` | 默认编码格式:`h264` / `h265` |
+| `defaultCodec` | `h264` | 默认编码格式:`h264` / `h265` / `av1` |
 | `defaultBitrate` | `2000000` | 默认码率(单位 bps,如 2 Mbps = `2000000`) |
 | `defaultMaxSize` | `0` | 默认最大分辨率,`0` 表示原始分辨率 |
 | `defaultMaxFps` | `0` | 默认帧率上限,`0` 表示不限制 |
@@ -352,11 +352,12 @@ server {
 
 | 解码器 | 说明 | 适用编码 |
 | --- | --- | --- |
-| WebCodecs(原生) | `VideoDecoder`,性能最好、延迟最低 | H.264/H.265(以 `isConfigSupported` 探测) |
+| WebCodecs(原生) | `VideoDecoder`,性能最好、延迟最低 | H.264/H.265/AV1(以 `isConfigSupported` 探测) |
+| h265web.js | [h265web.js](https://github.com/numberwolf/h265web.js) 播放器:硬解(WebCodecs/MSE)优先 + WASM 软解回退;通过 `/ws-raw` 裸流 WebSocket 喂流 | H.264/H.265/AV1(AV1 需 Chrome 与设备端支持) |
 | MediaSource(原生回退) | `MediaSource` + jmuxer(fMP4 封装) | 主要是 H.264(H.265 见 Safari) |
 | 自定义 JS/WASM 解码 | **纯 JS/WASM,不依赖浏览器原生解码**:H.264 → Broadway,H.265 → libde265(`@yume-chan/libde265`) | H.264 + H.265(建议 ≤720p) |
 
-- 「自动选择」按 WebCodecs → MediaSource → 自定义 JS 的优先级挑选可用后端。
+- 「自动选择」按 WebCodecs → h265web.js → 自定义 JS → MediaSource 的优先级挑选可用后端。
 - 选择「自定义JS解码」时,编码格式限定为 H.264/H.265;H.264 会强制编码端
   Baseline profile(Broadway 仅支持 Baseline),H.265 无需额外参数。
 - **H.265 低延迟**:libde265 解码在 **Web Worker** 中执行(不阻塞 UI),并带
@@ -406,8 +407,8 @@ server/                 Node.js 桥:index(HTTP/WS/多客户端)、adb、session(
 public/                 前端
   js/                   app(主逻辑)、input(输入转发)、stats(统计)、hotkeys、
                         nal(H.264/HEVC 参数集解析)
-  js/decoders/          解码器注册表:webcodecs / mse / broadway(h264) / libde265(h265)
-  vendor/               Broadway、libde265、jmuxer
+  js/decoders/          解码器注册表:webcodecs / mse / h265web / broadway(h264) / libde265(h265)
+  vendor/               Broadway、libde265、jmuxer、h265web
 tools/                  fetch-scrcpy-server.mjs、fetch-vendors.mjs
 test/                   单元测试 + 端到端冒烟测试(含 mock 设备)
 ```
@@ -415,7 +416,7 @@ test/                   单元测试 + 端到端冒烟测试(含 mock 设备)
 ## 测试
 
 ```bash
-npm test   # 30 个测试:协议字节级编码、视频帧解析、SPS 解析、端到端冒烟
+npm test   # 40 个测试:协议字节级编码、视频帧解析、SPS 解析、端到端冒烟
 ```
 
 端到端测试使用 `test/mock-adb` 模拟 adb 与安卓设备(推送合成 H.264 流),

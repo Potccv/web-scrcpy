@@ -75,7 +75,7 @@ function normalizeConfig(raw, source = "config") {
     else invalid("host");
   }
   if (raw.defaultCodec !== undefined) {
-    if (raw.defaultCodec === "h264" || raw.defaultCodec === "h265") cfg.defaultCodec = raw.defaultCodec;
+    if (["h264", "h265", "av1"].includes(raw.defaultCodec)) cfg.defaultCodec = raw.defaultCodec;
     else invalid("defaultCodec");
   }
   if (raw.defaultBitrate !== undefined) {
@@ -516,6 +516,12 @@ function handleSessionEvent(client, evt) {
           client.rateControl.bytes += evt.data.length; // 仅统计视频字节
         }
       }
+      // h265web.js 等解码器使用独立的裸流 WebSocket(/ws-raw),只转发视频 payload
+      if (client.mediaWs && client.mediaWs.readyState === WebSocket.OPEN) {
+        try {
+          client.mediaWs.send(evt.data);
+        } catch {}
+      }
       // 无条件缓存最新参数集与关键帧(录制开始时用于初始化文件头)
       if (evt.flags & PacketFlags.CONFIG) {
         client.lastConfig = Buffer.from(evt.data);
@@ -792,7 +798,7 @@ async function handleApi(req, res, url) {
 // ---------------------------------------------------------------------------
 
 function setupWebSocket(httpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     const client = {
@@ -803,13 +809,15 @@ function setupWebSocket(httpServer) {
       deviceMsgBuffer: Buffer.alloc(0),
       lastConfig: null,
       recording: null,
+      mediaToken: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2),
+      mediaWs: null,
       _opQueue: Promise.resolve(),
       _rateRestartPending: false,
         
     };
     clients.set(ws, client);
     console.log(`[ws] 客户端已连接(当前 ${clients.size} 个)`);
-    sendJson(ws, { type: "ready", clientCount: clients.size });
+    sendJson(ws, { type: "ready", clientCount: clients.size, mediaToken: client.mediaToken });
 
     ws.on("message", (data, isBinary) => {
         
@@ -831,6 +839,12 @@ function setupWebSocket(httpServer) {
 
     ws.on("close", () => {
       clients.delete(ws);
+      if (client.mediaWs) {
+        try {
+          client.mediaWs.close();
+        } catch {}
+        client.mediaWs = null;
+      }
       if (client.session) {
         stopSessionForClient(client).catch(() => {});
       }
@@ -838,6 +852,46 @@ function setupWebSocket(httpServer) {
     });
 
     ws.on("error", () => {});
+  });
+
+  // 独立裸流 WebSocket:h265web.js 等播放器直接读取原始视频 payload(无 [stream][flags] 头)
+  const mediaWss = new WebSocketServer({ noServer: true });
+
+  // 统一 upgrade 路由:/ws 为主控制/视频桥,/ws-raw 为 h265web.js 裸流
+  httpServer.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    if (url.pathname === "/ws") {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    if (url.pathname === "/ws-raw") {
+      mediaWss.handleUpgrade(req, socket, head, (ws) => {
+        const token = url.searchParams.get("token") || "";
+        let client = null;
+        for (const c of clients.values()) {
+          if (c.mediaToken === token) {
+            client = c;
+            break;
+          }
+        }
+        if (!client) {
+          ws.close(4001, "invalid media token");
+          return;
+        }
+        client.mediaWs = ws;
+        ws.on("message", () => {
+          // h265web.js 打开连接后会发送 "Hello WebSockets!" 文本,忽略即可
+        });
+        ws.on("close", () => {
+          if (client && client.mediaWs === ws) client.mediaWs = null;
+        });
+        ws.on("error", () => {});
+      });
+      return;
+    }
+    socket.destroy();
   });
 
   return wss;

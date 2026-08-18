@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Mp4Recorder, parseHevcDimensions } from "../shared/mp4-muxer.mjs";
-import { splitAnnexB, hevcNalType } from "../shared/nal.js";
+import { splitAnnexB, hevcNalType, parseSpsH265 } from "../shared/nal.js";
 
 const H264_VCL = new Set([1, 2, 3, 4, 5]);
 const H265_VCL = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
@@ -140,6 +140,16 @@ test("H.265 SPS 宽高解析", () => {
   assert.ok(d, "宽高应可解析");
   assert.equal(d.width, 640);
   assert.equal(d.height, 360);
+});
+
+test("H.265 SPS codec string 包含 compatibility 与 level(避免 WebCodecs 报 hvc1.1.L.0.B0)", { skip: !ffmpegAvailable() }, () => {
+  const raw = generateAnnexB("h265", 640, 360, 1);
+  const nals = splitAnnexB(raw);
+  const sps = nals.find((n) => hevcNalType(n.data) === 33);
+  assert.ok(sps, "应有 SPS");
+  const info = parseSpsH265(sps.data);
+  assert.notEqual(info.levelIdc, 0, "levelIdc 不应为 0");
+  assert.match(info.codec, /^hvc1\.\d+\.[0-9A-F]+\.L\d+\.[0-9A-F.]+$/);
 });
 
 test("无参数集时 finish 抛错", () => {

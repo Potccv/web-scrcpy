@@ -2,7 +2,7 @@
  * shared/video-stream.js — scrcpy 视频 socket 帧格式的增量解析器。
  *
  * 字节布局(与 scrcpy 4.x Streamer.java / demuxer.c 核对):
- *   1) 4 字节 codec id(ASCII:"h264"/"h265";0=流被禁用;1=配置错误)
+ *   1) 4 字节 codec id(ASCII:"h264"/"h265"/"\0av1";0=流被禁用;1=配置错误)
  *   2) 视频流随后是 12 字节 session 头:[0x80.. flags 4B][width 4B BE][height 4B BE]
  *      (flags 最高位为 session 标记,bit0 表示 client_resized)
  *   3) 之后重复:12 字节帧头:[pts+flags 8B BE][payload size 4B BE] + payload
@@ -15,6 +15,7 @@ import { read32be, read64beBig } from "./protocol.js";
 export const CODEC_ID = {
   H264: 0x68323634, // "h264"
   H265: 0x68323635, // "h265"
+  AV1: 0x00617631, // "\0av1" (scrcpy 4.x 对 AV1 使用前导 0 的 4 字节 ID)
 };
 
 export function codecIdToString(id) {

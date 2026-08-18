@@ -41,7 +41,7 @@ export class ScrcpySession {
    * @param {string} opts.serial 设备序列号
    * @param {string} opts.version scrcpy 服务器版本(必须与 jar 一致)
    * @param {string} [opts.serverJar] 本地 jar 路径
-   * @param {string} [opts.codec] h264/h265
+   * @param {string} [opts.codec] h264/h265/av1
    * @param {number} [opts.bitrate]
    * @param {number} [opts.maxSize] 0 = 原始
    * @param {number} [opts.maxFps] 0 = 不限制
