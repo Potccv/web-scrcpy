@@ -84,27 +84,18 @@ export class WebCodecsDecoder {
     this._renderer = createLatestFrameRenderer(
       (frame) => {
         try {
-          // 使用 VideoFrame 的 visibleRect/display 尺寸绘制,避免 H.265 编码裁剪/补齐
-          // 导致的画面错位(竖屏高分辨率下尤其明显)。
-          const rect = frame.visibleRect || {
-            x: 0,
-            y: 0,
-            width: frame.codedWidth || frame.displayWidth || this.canvas.width,
-            height: frame.codedHeight || frame.displayHeight || this.canvas.height,
-          };
-          const dw = frame.displayWidth || rect.width;
-          const dh = frame.displayHeight || rect.height;
-          this.ctx.drawImage(
-            frame,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            0,
-            0,
-            this.canvas.width,
-            this.canvas.height
-          );
+          // 按 VideoFrame 的显示尺寸等比缩放绘制,避免手动传 source rect 造成截取,
+          // 也避免画布比例与帧显示比例不一致时被拉伸错位。
+          const vw = frame.displayWidth || frame.codedWidth || this.canvas.width;
+          const vh = frame.displayHeight || frame.codedHeight || this.canvas.height;
+          const scale = Math.min(this.canvas.width / vw, this.canvas.height / vh);
+          const dw = Math.max(1, Math.round(vw * scale));
+          const dh = Math.max(1, Math.round(vh * scale));
+          const dx = Math.round((this.canvas.width - dw) / 2);
+          const dy = Math.round((this.canvas.height - dh) / 2);
+          this.ctx.fillStyle = "#000";
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+          this.ctx.drawImage(frame, dx, dy, dw, dh);
         } catch {
           // 尺寸变化瞬间可能失败,忽略
         }

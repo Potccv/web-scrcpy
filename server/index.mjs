@@ -896,6 +896,18 @@ function setupWebSocket(httpServer) {
           return;
         }
         client.mediaWs = ws;
+        // 连接建立后先补发最近一次参数集和关键帧,避免 h265web.js 在旋转/重连时
+        // 错过 config/keyframe 导致黑屏或卡住。
+        if (client.lastConfig) {
+          try {
+            client.mediaWs.send(client.lastConfig);
+          } catch {}
+        }
+        if (client.lastKeyFrame && client.lastKeyFrame.data) {
+          try {
+            client.mediaWs.send(client.lastKeyFrame.data);
+          } catch {}
+        }
         ws.on("message", () => {
           // h265web.js 打开连接后会发送 "Hello WebSockets!" 文本,忽略即可
         });

@@ -583,6 +583,18 @@ class App {
     const gen = ++this._metaGen;
     this._setSessionState("connected");
 
+    // WebCodecs 支持在下一个 config 包到达时自动重建解码器;旋转/切分辨率时
+    // 不必先销毁,避免旧解码器销毁/新解码器初始化期间的竞态与报错。
+    if (this.decoderId === "webcodecs" && this.decoder && this.applied.codec === codec) {
+      this.applied = { codec, width, height };
+      this.dom.canvas.width = width;
+      this.dom.canvas.height = height;
+      const tip = $("empty-tip");
+      if (tip) tip.style.display = "none";
+      this._syncStatusBar();
+      return;
+    }
+
     this._destroyDecoder();
     this.dom.videoEl.pause();
     const isMse = this.decoderId === "mse";
