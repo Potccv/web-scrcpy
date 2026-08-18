@@ -84,10 +84,16 @@ export class WebCodecsDecoder {
     this._renderer = createLatestFrameRenderer(
       (frame) => {
         try {
-          // 按 VideoFrame 的显示尺寸等比缩放绘制,避免手动传 source rect 造成截取,
-          // 也避免画布比例与帧显示比例不一致时被拉伸错位。
-          const vw = frame.displayWidth || frame.codedWidth || this.canvas.width;
-          const vh = frame.displayHeight || frame.codedHeight || this.canvas.height;
+          // 使用 codedRect(完整编码帧)作为源,避免部分 H.265 流 visibleRect 异常
+          // 导致只绘制左上角区域;再按完整编码帧等比缩放/居中绘制。
+          const rect = frame.codedRect || {
+            x: 0,
+            y: 0,
+            width: frame.codedWidth || this.canvas.width,
+            height: frame.codedHeight || this.canvas.height,
+          };
+          const vw = rect.width || this.canvas.width;
+          const vh = rect.height || this.canvas.height;
           const scale = Math.min(this.canvas.width / vw, this.canvas.height / vh);
           const dw = Math.max(1, Math.round(vw * scale));
           const dh = Math.max(1, Math.round(vh * scale));
@@ -95,7 +101,7 @@ export class WebCodecsDecoder {
           const dy = Math.round((this.canvas.height - dh) / 2);
           this.ctx.fillStyle = "#000";
           this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-          this.ctx.drawImage(frame, dx, dy, dw, dh);
+          this.ctx.drawImage(frame, rect.x, rect.y, rect.width, rect.height, dx, dy, dw, dh);
         } catch {
           // 尺寸变化瞬间可能失败,忽略
         }

@@ -45,6 +45,8 @@ export class MseDecoder {
         flushingTime: 50,
         // 缓冲上限 300ms,防止延迟积累
         maxDelay: 300,
+        // 自动清理已播放的 MediaSource 缓冲(jmuxer 的低延迟关键选项)
+        clearBuffer: true,
         fps: 30,
         debug: false,
         onReady: () => {
@@ -68,22 +70,6 @@ export class MseDecoder {
     this.videoEl.addEventListener("error", this._onVideoError);
     this.videoEl.play().catch(() => {});
     this._setupFrameCounter();
-    // 周期性检查 MediaSource 缓冲长度,超过阈值时向前跳,防止延迟持续累积
-    this._delayCheck = setInterval(() => this._trimBuffer(), 1000);
-  }
-
-  _trimBuffer() {
-    if (this.destroyed || !this.videoEl) return;
-    try {
-      if (this.videoEl.buffered.length > 0) {
-        const end = this.videoEl.buffered.end(this.videoEl.buffered.length - 1);
-        const start = this.videoEl.buffered.start(0);
-        // 缓冲超过 1 秒时,直接跳到接近最新处,丢弃积压
-        if (end - start > 1.0) {
-          this.videoEl.currentTime = Math.max(start, end - 0.3);
-        }
-      }
-    } catch {}
   }
 
   _setupFrameCounter() {
@@ -144,10 +130,6 @@ export class MseDecoder {
 
   destroy() {
     this.destroyed = true;
-    if (this._delayCheck) {
-      clearInterval(this._delayCheck);
-      this._delayCheck = null;
-    }
     if (this._onVideoError) {
       this.videoEl.removeEventListener("error", this._onVideoError);
       this._onVideoError = null;
