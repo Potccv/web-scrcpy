@@ -786,6 +786,13 @@ async function handleApi(req, res, url) {
     return sendRes(res, result.ok ? 200 : 500, result);
   }
 
+  if (method === "GET" && p === "/api/device/display") {
+    const serial = url.searchParams.get("serial") || "";
+    if (!serial) return sendRes(res, 400, { error: "缺少 serial 参数" });
+    const result = await adb.getDisplaySize(serial);
+    return sendRes(res, result.ok ? 200 : 500, result);
+  }
+
   if (method === "POST" && p === "/api/devices/connect") {
     const body = await readBody(req);
     const result = await adb.connect(body.host || "", Number(body.port) || 0);

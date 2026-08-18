@@ -84,7 +84,27 @@ export class WebCodecsDecoder {
     this._renderer = createLatestFrameRenderer(
       (frame) => {
         try {
-          this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+          // 使用 VideoFrame 的 visibleRect/display 尺寸绘制,避免 H.265 编码裁剪/补齐
+          // 导致的画面错位(竖屏高分辨率下尤其明显)。
+          const rect = frame.visibleRect || {
+            x: 0,
+            y: 0,
+            width: frame.codedWidth || frame.displayWidth || this.canvas.width,
+            height: frame.codedHeight || frame.displayHeight || this.canvas.height,
+          };
+          const dw = frame.displayWidth || rect.width;
+          const dh = frame.displayHeight || rect.height;
+          this.ctx.drawImage(
+            frame,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            0,
+            0,
+            this.canvas.width,
+            this.canvas.height
+          );
         } catch {
           // 尺寸变化瞬间可能失败,忽略
         }

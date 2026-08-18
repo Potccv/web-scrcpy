@@ -12,6 +12,7 @@
   <script src="/vendor/broadway/Decoder.js"></script>
   <script src="/vendor/stream.js"></script>
   <script src="/vendor/jmuxer.min.js"></script>
+  <script src="/vendor/h265web/extjs.js"></script>
   <script src="/vendor/h265web/h265web.js"></script>
 </head>
 <body>
@@ -84,8 +85,10 @@
           <input id="custom-bitrate" type="number" min="0.1" step="0.1" placeholder="Mbps,如 6" style="display:none" />
           <button id="apply-bitrate" style="display:none">应用</button>
         </label>
-        <label>最大分辨率
+        <label>分辨率
           <select id="size-select"></select>
+          <input id="custom-size" type="number" min="1" step="1" placeholder="最长边像素,如 1440" style="display:none" />
+          <button id="apply-size" style="display:none">应用</button>
         </label>
         <label>帧率上限
           <select id="fps-select"></select>

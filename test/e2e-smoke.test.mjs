@@ -132,6 +132,14 @@ test("设备编码器检测 API", async () => {
   assert.ok(!json.codecs.includes("av1")); // mock 设备不提供 AV1 编码器
 });
 
+test("设备显示分辨率 API", async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/api/device/display?serial=emulator-5554`);
+  const json = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(json.width, 1080);
+  assert.equal(json.height, 2400);
+});
+
 test("设备列表 API", async () => {
   const res = await fetch(`http://127.0.0.1:${port}/api/status`);
   const json = await res.json();

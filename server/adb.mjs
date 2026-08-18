@@ -88,6 +88,36 @@ export async function getprop(serial, name) {
 }
 
 /**
+ * 获取设备当前显示分辨率(wm size)。
+ * 返回 { ok, width, height, raw }。
+ */
+export async function getDisplaySize(serial) {
+  const r = await run(["-s", serial, "shell", "wm", "size"], { timeout: 10000 });
+  const text = `${r.stdout}\n${r.stderr}`;
+  const m = text.match(/(\d+)\s*[xX]\s*(\d+)/);
+  if (!m) {
+    return { ok: false, width: 0, height: 0, raw: text, message: "无法获取设备分辨率" };
+  }
+
+  // 尝试读取当前屏幕方向:0/2=竖屏,1/3=横屏
+  let orientation = null;
+  try {
+    const o = await run(["-s", serial, "shell", "dumpsys", "input"], { timeout: 10000 });
+    const om = o.stdout.match(/SurfaceOrientation:\s*(\d+)/);
+    if (om) orientation = Number(om[1]);
+  } catch {}
+
+  let width = Number(m[1]);
+  let height = Number(m[2]);
+  // 如果系统报告横屏但 wm size 仍是竖屏尺寸,则交换宽高
+  if ((orientation === 1 || orientation === 3) && width < height) {
+    [width, height] = [height, width];
+  }
+
+  return { ok: true, width, height, orientation, raw: text };
+}
+
+/**
  * 查询设备支持的视频编码器(scrcpy list_encoders)。
  * 返回 { ok, codecs, encoders, raw, message }。
  */

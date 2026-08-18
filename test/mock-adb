@@ -136,6 +136,16 @@ function main() {
       process.exit(0);
     }
     if (sub === "shell") {
+      // 模拟 wm size
+      if (args.includes("wm") && args.includes("size")) {
+        process.stdout.write("Physical size: 1080x2400\n");
+        process.exit(0);
+      }
+      // 模拟 dumpsys input 方向
+      if (args.includes("dumpsys") && args.includes("input")) {
+        process.stdout.write("SurfaceOrientation: 0\n");
+        process.exit(0);
+      }
       // 模拟 scrcpy --list-encoders:列出设备支持的编码器后退出
       if (args.includes("list_encoders=true")) {
         process.stdout.write(

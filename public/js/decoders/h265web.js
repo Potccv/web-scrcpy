@@ -13,6 +13,11 @@
  */
 let uid = 0;
 
+// h265web.js 官方公开的免费 token(来自项目 README,非用户私密凭据)。
+// 旧版 raw265 内核初始化 WASM 时需要传入该字符串。
+const H265WEB_TOKEN =
+  "base64:QXV0aG9yOmNoYW5neWFubG9uZ3xudW1iZXJ3b2xmLEdpdGh1YjpodHRwczovL2dpdGh1Yi5jb20vbnVtYmVyd29sZixFbWFpbDpwb3JzY2hlZ3QyM0Bmb3htYWlsLmNvbSxRUTo1MzEzNjU4NzIsSG9tZVBhZ2U6aHR0cDovL3h2aWRlby52aWRlbyxEaXNjb3JkOm51bWJlcndvbGYjODY5NCx3ZWNoYXI6bnVtYmVyd29sZjExLEJlaWppbmcsV29ya0luOkJhaWR1";
+
 export class H265webDecoder {
   constructor({ canvas, mediaToken, onFrame, onError, onInfo, onFrameDrop }) {
     this.canvas = canvas;
@@ -34,7 +39,7 @@ export class H265webDecoder {
   static supported(codec) {
     return (
       typeof window !== "undefined" &&
-      !!window.H265webjsPlayer &&
+      !!(window.new265webjs || window.H265webjsPlayer) &&
       ["h264", "h265", "av1"].includes(codec)
     );
   }
@@ -45,7 +50,7 @@ export class H265webDecoder {
     this._resizeCanvas(meta.width, meta.height);
 
     return new Promise((resolve, reject) => {
-      if (!window.H265webjsPlayer) {
+      if (!window.new265webjs && !window.H265webjsPlayer) {
         const err = new Error("h265web.js 未加载,请检查 /vendor/h265web/h265web.js");
         this.onError && this.onError(err.message);
         reject(err);
@@ -60,15 +65,64 @@ export class H265webDecoder {
 
       try {
         this._createContainer();
-        const player = window.H265webjsPlayer();
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const url = `${proto}://${location.host}/ws-raw?token=${encodeURIComponent(this.mediaToken)}`;
+
+        // 优先使用旧版 raw265 播放内核(new265webjs),它专为 raw265/raw HEVC/AVC 裸流设计;
+        // 新版 H265webjsPlayer 的 raw265 在部分环境下不出图。
+        let player;
+        if (window.new265webjs) {
+          const config = {
+            type: "raw265",
+            player: this.container.id,
+            width: meta.width || 640,
+            height: meta.height || 360,
+            token: H265WEB_TOKEN,
+            extInfo: {
+              rawFps: 30,
+              ignoreAudio: 1,
+              autoPlay: true,
+              readyShow: true,
+              cacheLength: 30,
+            },
+          };
+          player = window.new265webjs(url, config);
+        } else {
+          player = window.H265webjsPlayer();
+          const ok = player.build({
+            player_id: this.container.id,
+            base_url: "/vendor/h265web/",
+            wasm_js_uri: "h265web_wasm.js",
+            wasm_wasm_uri: "h265web_wasm.wasm",
+            ext_src_js_uri: "extjs.js",
+            ext_wasm_js_uri: "extwasm.js",
+            width: meta.width || 640,
+            height: meta.height || 360,
+            color: "#000",
+            auto_play: true,
+            ignore_audio: true,
+            token: H265WEB_TOKEN,
+            type: "raw265",
+            format_type: "raw265",
+            extInfo: {
+              rawFps: 30,
+              ignoreAudio: 1,
+              autoPlay: true,
+              readyShow: true,
+              cacheLength: 30,
+            },
+          });
+          if (!ok) {
+            const err = new Error("h265web.js build 失败");
+            this.onError && this.onError(err.message);
+            reject(err);
+            return;
+          }
+          player.load_media(url);
+        }
+
         this.player = player;
-
-        player.on_error_callback = (err) => {
-          const msg = (err && (err.message || err.msg || JSON.stringify(err))) || "h265web.js 解码错误";
-          this.onError && this.onError("h265web.js: " + msg);
-        };
-
-        player.on_ready_show_done_callback = () => {
+        player.onLoadFinish = () => {
           this._ready = true;
           this.onFrame && this.onFrame({});
           if (player.play) {
@@ -76,48 +130,14 @@ export class H265webDecoder {
             if (p && p.catch) p.catch(() => {});
           }
         };
-
-        player.video_probe_callback = (info) => {
-          if (info && info.meta && info.meta.size) {
-            this._resizeCanvas(info.meta.size.width, info.meta.size.height);
-          }
+        player.onError = (err) => {
+          const msg = (err && (err.message || err.msg || JSON.stringify(err))) || "h265web.js 解码错误";
+          this.onError && this.onError("h265web.js: " + msg);
         };
+        // 兼容旧版/新版不同回调命名
+        player.on_error_callback = player.onError;
+        player.on_ready_show_done_callback = player.onLoadFinish;
 
-        // 注意:video_render_callback 属于 software-only 回调,设置后会强制 h265web.js
-        // 走 WASM 软解;为保留其“硬解优先 + 软解回退”能力,这里不绑定该回调,
-        // 帧统计在复制画布的 rAF 中按时间节流近似统计。
-        const ok = player.build({
-          player_id: this.container.id,
-          base_url: "/vendor/h265web/",
-          wasm_js_uri: "h265web_wasm.js",
-          wasm_wasm_uri: "h265web_wasm.wasm",
-          ext_src_js_uri: "extjs.js",
-          ext_wasm_js_uri: "extwasm.js",
-          width: meta.width || 640,
-          height: meta.height || 360,
-          color: "#000",
-          auto_play: true,
-          ignore_audio: true,
-          type: "raw265",
-          format_type: "raw265",
-          extInfo: {
-            rawFps: 30,
-            ignoreAudio: 1,
-            autoPlay: true,
-            cacheLength: 30,
-          },
-        });
-
-        if (!ok) {
-          const err = new Error("h265web.js build 失败");
-          this.onError && this.onError(err.message);
-          reject(err);
-          return;
-        }
-
-        const proto = location.protocol === "https:" ? "wss" : "ws";
-        const url = `${proto}://${location.host}/ws-raw?token=${encodeURIComponent(this.mediaToken)}`;
-        player.load_media(url);
         this._startCopyLoop();
         resolve();
       } catch (e) {

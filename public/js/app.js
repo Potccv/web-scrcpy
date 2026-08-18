@@ -34,11 +34,14 @@ class App {
     this.sessionState = "idle"; // idle | starting | connected | restarting
     this.meta = { codec: null, width: null, height: null, deviceName: null };
     this.applied = { codec: null, width: null, height: null };
+    this._metaGen = 0;
     this.decoderId = null;
     this.decoder = null;
     this.mediaToken = null;
     this.supportedCodecs = null;
     this._encoderReqId = 0;
+    this.deviceDisplay = null;
+    this._displayReqId = 0;
     this.codecOptions = "";
     this.rateLimit = null; // {bitrate, actual}
     this.deviceSerial = ""; // 当前选中的设备(列表形式)
@@ -103,7 +106,13 @@ class App {
         }
         if (cfg.defaultMaxSize !== undefined) {
           const opt = this.dom.sizeSelect.querySelector(`option[value="${cfg.defaultMaxSize}"]`);
-          if (opt) this.dom.sizeSelect.value = String(cfg.defaultMaxSize);
+          if (opt) {
+            this.dom.sizeSelect.value = String(cfg.defaultMaxSize);
+          } else if (cfg.defaultMaxSize > 0) {
+            this.dom.sizeSelect.value = "custom";
+            this.dom.customSize.value = String(cfg.defaultMaxSize);
+            this._syncSizeCustom();
+          }
         }
         if (cfg.defaultMaxFps !== undefined) {
           const opt = this.dom.fpsSelect.querySelector(`option[value="${cfg.defaultMaxFps}"]`);
@@ -129,6 +138,8 @@ class App {
       customBitrate: $("custom-bitrate"),
       applyBitrateBtn: $("apply-bitrate"),
       sizeSelect: $("size-select"),
+      customSize: $("custom-size"),
+      applySizeBtn: $("apply-size"),
       fpsSelect: $("fps-select"),
       decoderSelect: $("decoder-select"),
       probeBtn: $("probe-btn"),
@@ -190,12 +201,7 @@ class App {
     custom.textContent = "自定义…";
     this.dom.bitrateSelect.appendChild(custom);
 
-    for (const s of MAX_SIZE_PRESETS) {
-      const opt = document.createElement("option");
-      opt.value = String(s.value);
-      opt.textContent = s.label;
-      this.dom.sizeSelect.appendChild(opt);
-    }
+    this._buildSizeOptions();
     for (const f of FPS_PRESETS) {
       const opt = document.createElement("option");
       opt.value = String(f.value);
@@ -273,6 +279,93 @@ class App {
     }
   }
 
+  /** 查询当前设备显示分辨率,用于生成带横/竖屏尺寸的分辨率选项 */
+  async updateDeviceDisplay(serial) {
+    const reqId = ++this._displayReqId;
+    if (!serial) return;
+    try {
+      const res = await fetch(`/api/device/display?serial=${encodeURIComponent(serial)}`);
+      const json = await res.json();
+      if (reqId !== this._displayReqId) return;
+      if (json.ok && json.width && json.height) {
+        this.deviceDisplay = { width: json.width, height: json.height };
+      } else {
+        this.deviceDisplay = null;
+      }
+    } catch {
+      if (reqId !== this._displayReqId) return;
+      this.deviceDisplay = null;
+    }
+    this._buildSizeOptions();
+  }
+
+  /** 根据设备当前显示分辨率生成“分辨率”下拉框 */
+  _buildSizeOptions() {
+    const select = this.dom.sizeSelect;
+    if (!select) return;
+    const prev = select.value;
+    select.innerHTML = "";
+    const d = this.deviceDisplay;
+    const add = (value, label) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      select.appendChild(opt);
+    };
+
+    add("0", d ? `原始分辨率 (${d.width}x${d.height})` : "原始分辨率");
+    for (const s of MAX_SIZE_PRESETS) {
+      if (s.value === 0) continue;
+      let label = s.label;
+      if (d && d.width && d.height) {
+        const landscape = d.width >= d.height;
+        const max = s.value;
+        let w;
+        let h;
+        if (landscape) {
+          w = max;
+          h = Math.round((max * d.height) / d.width);
+        } else {
+          h = max;
+          w = Math.round((max * d.width) / d.height);
+        }
+        label = `${max} (${w}x${h})`;
+      }
+      add(String(s.value), label);
+    }
+    add("custom", "自定义…");
+
+    if (prev && [...select.options].some((o) => o.value === prev)) {
+      select.value = prev;
+    } else {
+      select.value = "0";
+    }
+    this._syncSizeCustom();
+  }
+
+  /** 分辨率下拉框变化:自定义时显示输入框,预设时立即应用 */
+  _onSizeChange() {
+    this._syncSizeCustom();
+    if (this.dom.sizeSelect.value !== "custom") {
+      this._onSessionParamChange();
+    }
+  }
+
+  _syncSizeCustom() {
+    const custom = this.dom.sizeSelect.value === "custom";
+    if (this.dom.customSize) this.dom.customSize.style.display = custom ? "inline-block" : "none";
+    if (this.dom.applySizeBtn) this.dom.applySizeBtn.style.display = custom ? "inline-block" : "none";
+  }
+
+  _applyCustomSize() {
+    const v = Number(this.dom.customSize.value);
+    if (!Number.isFinite(v) || v <= 0) {
+      this._toast("请输入有效的分辨率(最长边像素)", 3000);
+      return;
+    }
+    this._applyConfig({ maxSize: Math.round(v) });
+  }
+
   _bindUi() {
     const d = this.dom;
     d.refreshDevicesBtn.addEventListener("click", () => this.refreshDevices());
@@ -286,7 +379,8 @@ class App {
     d.codecSelect.addEventListener("change", () => this._onCodecOrDecoderChange());
     d.decoderSelect.addEventListener("change", () => this._onCodecOrDecoderChange());
     d.probeBtn.addEventListener("click", () => this.showProbe());
-    d.sizeSelect.addEventListener("change", () => this._onSessionParamChange());
+    d.sizeSelect.addEventListener("change", () => this._onSizeChange());
+    d.applySizeBtn.addEventListener("click", () => this._applyCustomSize());
     d.fpsSelect.addEventListener("change", () => this._onSessionParamChange());
     d.themeModeBtn.addEventListener("click", () => this._toggleThemeMode());
 
@@ -486,7 +580,7 @@ class App {
     const { codec, width, height } = this.meta;
     if (!codec || !width || !height) return;
     if (codec === this.applied.codec && width === this.applied.width && height === this.applied.height) return;
-    this.applied = { codec, width, height };
+    const gen = ++this._metaGen;
     this._setSessionState("connected");
 
     this._destroyDecoder();
@@ -500,7 +594,7 @@ class App {
     if (tip) tip.style.display = "none";
 
     try {
-      this.decoder = createDecoder(this.decoderId, {
+      const decoder = createDecoder(this.decoderId, {
         codec,
         canvas: this.dom.canvas,
         videoEl: this.dom.videoEl,
@@ -513,7 +607,14 @@ class App {
         onInfo: (m) => this._toast(m, 3000),
           onFrameDrop: () => this.stats.addDroppedFrame(),
       });
-      await this.decoder.init({ codec, width, height });
+      this.decoder = decoder;
+      await decoder.init({ codec, width, height });
+      // 旋转/切流期间可能又收到新的 meta,丢弃过期初始化结果
+      if (gen !== this._metaGen) {
+        if (this.decoder === decoder) this._destroyDecoder();
+        return;
+      }
+      this.applied = { codec, width, height };
       const label = this.decoderId === "custom-js"
         ? customJsDecoderLabel(codec)
         : this.decoderId === "h265web"
@@ -523,7 +624,11 @@ class App {
       this.stats.setDecoder(label + (this.codecOptions ? " (profile=baseline)" : ""));
       this._syncStatusBar();
       this._log(`视频流就绪:${codec.toUpperCase()} ${width}x${height} 解码器=${label}`);
+      if ((this.decoderId === "custom-js" || this.decoderId === "h265web") && width * height > 1280 * 720) {
+        this._toast("当前为 JS/WASM 软解,高分辨率下可能有明显延迟;建议降低分辨率或改用 WebCodecs", 6000);
+      }
     } catch (e) {
+      if (gen !== this._metaGen) return;
       this._toast("解码器初始化失败:" + e.message, 6000);
     }
   }
@@ -549,10 +654,14 @@ class App {
       bitrate = Number(this.dom.customBitrate.value) * 1_000_000;
       if (!Number.isFinite(bitrate) || bitrate <= 0) bitrate = 2_000_000;
     }
+    let maxSize = Number(this.dom.sizeSelect.value) || 0;
+    if (this.dom.sizeSelect.value === "custom") {
+      maxSize = Number(this.dom.customSize.value) || 0;
+    }
     return {
       codec: this.dom.codecSelect.value,
       bitrate,
-      maxSize: Number(this.dom.sizeSelect.value) || 0,
+      maxSize,
       maxFps: Number(this.dom.fpsSelect.value) || 0,
       decoder: this.dom.decoderSelect.value,
     };
@@ -1161,6 +1270,7 @@ class App {
       c.classList.toggle("active", c === el);
     }
     this.updateDeviceEncoderSupport(serial);
+    this.updateDeviceDisplay(serial);
   }
 
   async connectDevice() {
