@@ -778,6 +778,14 @@ async function handleApi(req, res, url) {
     return sendRes(res, 200, { devices });
   }
 
+  if (method === "GET" && p === "/api/device/encoders") {
+    const serial = url.searchParams.get("serial") || "";
+    if (!serial) return sendRes(res, 400, { error: "缺少 serial 参数" });
+    const serverJar = path.join(BIN_DIR, "scrcpy-server.jar");
+    const result = await adb.listEncoders(serial, { serverJar, version: SERVER_VERSION });
+    return sendRes(res, result.ok ? 200 : 500, result);
+  }
+
   if (method === "POST" && p === "/api/devices/connect") {
     const body = await readBody(req);
     const result = await adb.connect(body.host || "", Number(body.port) || 0);

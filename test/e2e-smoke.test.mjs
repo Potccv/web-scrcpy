@@ -122,6 +122,16 @@ test("/ws-raw 裸流 WebSocket 校验 token", async () => {
   assert.equal(result.code, 4001);
 });
 
+test("设备编码器检测 API", async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/api/device/encoders?serial=emulator-5554`);
+  const json = await res.json();
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(json.codecs));
+  assert.ok(json.codecs.includes("h264"));
+  assert.ok(json.codecs.includes("h265"));
+  assert.ok(!json.codecs.includes("av1")); // mock 设备不提供 AV1 编码器
+});
+
 test("设备列表 API", async () => {
   const res = await fetch(`http://127.0.0.1:${port}/api/status`);
   const json = await res.json();

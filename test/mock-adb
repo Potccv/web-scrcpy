@@ -136,6 +136,20 @@ function main() {
       process.exit(0);
     }
     if (sub === "shell") {
+      // 模拟 scrcpy --list-encoders:列出设备支持的编码器后退出
+      if (args.includes("list_encoders=true")) {
+        process.stdout.write(
+          [
+            "List of video encoders:",
+            "--video-codec=h264 --video-encoder=c2.mock.avc.encoder (hw)",
+            "--video-codec=h265 --video-encoder=c2.mock.hevc.encoder (hw)",
+            "--video-codec=vp8 --video-encoder=c2.android.vp8.encoder (sw)",
+            "--video-codec=vp9 --video-encoder=OMX.google.vp9.encoder (hybrid)",
+            "",
+          ].join("\n")
+        );
+        process.exit(0);
+      }
       // 打印一些服务器日志并保持存活(模拟 app_process 常驻)
       process.stdout.write("INFO: Device: [Mock] Pixel 5 (Android 14)\n");
       process.stdout.write("INFO: server started\n");

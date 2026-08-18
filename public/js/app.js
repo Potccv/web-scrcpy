@@ -37,6 +37,8 @@ class App {
     this.decoderId = null;
     this.decoder = null;
     this.mediaToken = null;
+    this.supportedCodecs = null;
+    this._encoderReqId = 0;
     this.codecOptions = "";
     this.rateLimit = null; // {bitrate, actual}
     this.deviceSerial = ""; // 当前选中的设备(列表形式)
@@ -170,6 +172,7 @@ class App {
       const opt = document.createElement("option");
       opt.value = c.id;
       opt.textContent = `${c.label} — ${c.note}`;
+      opt.dataset.label = opt.textContent;
       if (c.id === "h264") opt.selected = true;
       this.dom.codecSelect.appendChild(opt);
     }
@@ -222,6 +225,51 @@ class App {
     // 尽量保留用户之前选择的解码方式;若新编码不支持则回退到第一项(auto)
     if (previous && [...this.dom.decoderSelect.options].some((o) => o.value === previous)) {
       this.dom.decoderSelect.value = previous;
+    }
+  }
+
+  /** 查询当前设备支持的编码器,并更新编码格式下拉框的可用状态 */
+  async updateDeviceEncoderSupport(serial) {
+    const reqId = ++this._encoderReqId;
+    if (!serial) return;
+    try {
+      const res = await fetch(`/api/device/encoders?serial=${encodeURIComponent(serial)}`);
+      const json = await res.json();
+      if (reqId !== this._encoderReqId) return; // 已切换设备,丢弃过期结果
+      if (Array.isArray(json.codecs) && json.codecs.length > 0) {
+        this.supportedCodecs = json.codecs;
+      } else {
+        // 查询失败时回退为“不限制”,避免误伤可用编码
+        this.supportedCodecs = null;
+      }
+    } catch {
+      if (reqId !== this._encoderReqId) return;
+      this.supportedCodecs = null;
+    }
+    this._applyCodecSupport();
+  }
+
+  /** 根据设备支持的编码器禁用/恢复编码格式选项 */
+  _applyCodecSupport() {
+    const supported = this.supportedCodecs;
+    const select = this.dom.codecSelect;
+    if (!select) return;
+
+    for (const opt of select.options) {
+      const original = opt.dataset.label || opt.textContent;
+      if (supported && supported.length && !supported.includes(opt.value)) {
+        opt.disabled = true;
+        opt.textContent = `${original} (设备不支持)`;
+      } else {
+        opt.disabled = false;
+        opt.textContent = original;
+      }
+    }
+
+    if (supported && supported.length && !supported.includes(select.value)) {
+      // 当前编码设备不支持时切回 H.264(默认兼容编码)
+      select.value = "h264";
+      this._onCodecOrDecoderChange();
     }
   }
 
@@ -1112,6 +1160,7 @@ class App {
     for (const c of list.children) {
       c.classList.toggle("active", c === el);
     }
+    this.updateDeviceEncoderSupport(serial);
   }
 
   async connectDevice() {

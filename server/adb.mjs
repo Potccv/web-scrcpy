@@ -88,6 +88,57 @@ export async function getprop(serial, name) {
 }
 
 /**
+ * 查询设备支持的视频编码器(scrcpy list_encoders)。
+ * 返回 { ok, codecs, encoders, raw, message }。
+ */
+export async function listEncoders(serial, { serverJar, version = "4.1" } = {}) {
+  const remotePath = "/data/local/tmp/scrcpy-server.jar";
+  if (serverJar) {
+    const p = await push(serial, serverJar, remotePath);
+    if (!p.ok) {
+      return { ok: false, codecs: [], encoders: [], message: `推送 scrcpy-server 失败:${p.message}` };
+    }
+  }
+
+  const r = await run(
+    [
+      "-s",
+      serial,
+      "shell",
+      `CLASSPATH=${remotePath}`,
+      "app_process",
+      "/",
+      "com.genymobile.scrcpy.Server",
+      version,
+      "list_encoders=true",
+      "log_level=info",
+    ],
+    { timeout: 20000 }
+  );
+
+  const text = `${r.stdout}\n${r.stderr}`;
+  const codecs = [];
+  const encoders = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/--video-codec=([a-z0-9]+)/);
+    if (m) {
+      const codec = m[1];
+      if (!codecs.includes(codec)) codecs.push(codec);
+      const enc = line.match(/--video-encoder=([^\s]+)/);
+      if (enc) encoders.push({ codec, encoder: enc[1], line: line.trim() });
+    }
+  }
+
+  return {
+    ok: r.code === 0 || codecs.length > 0,
+    codecs,
+    encoders,
+    raw: text,
+    message: r.code === 0 ? "" : r.stderr.trim() || r.stdout.trim(),
+  };
+}
+
+/**
  * 在设备上启动 scrcpy 服务器(app_process)。
  * 返回子进程;stdout/stderr 为服务器日志。
  */
