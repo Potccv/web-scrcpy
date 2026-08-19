@@ -257,6 +257,22 @@ export function parseSpsH265(sps) {
       if (r.readBits(1)) r.readBits(8); // sub_layer_level_idc
     }
   }
+  r.ue(); // sps_seq_parameter_set_id
+  const chromaFormatIdc = r.ue();
+  if (chromaFormatIdc === 3) r.readBits(1); // separate_colour_plane_flag
+  const codedWidth = r.ue(); // pic_width_in_luma_samples
+  const codedHeight = r.ue(); // pic_height_in_luma_samples
+  let confWin = { left: 0, right: 0, top: 0, bottom: 0 };
+  if (r.readBits(1)) {
+    confWin.left = r.ue();
+    confWin.right = r.ue();
+    confWin.top = r.ue();
+    confWin.bottom = r.ue();
+  }
+  const subWidthC = chromaFormatIdc === 3 ? 1 : chromaFormatIdc === 2 ? 2 : 2;
+  const subHeightC = chromaFormatIdc === 3 ? 1 : chromaFormatIdc === 1 ? 2 : 1;
+  const width = Math.max(0, codedWidth - (confWin.left + confWin.right) * subWidthC);
+  const height = Math.max(0, codedHeight - (confWin.top + confWin.bottom) * subHeightC);
   // 生成 WebCodecs 可识别的 HEVC codec string:
   //   hvc1.<profile_idc>.<profile_compatibility_flags>.<tier><level>.<constraint bytes>
   // 示例:hvc1.1.6.L93.B0
@@ -284,6 +300,12 @@ export function parseSpsH265(sps) {
     constraintFlags,
     levelIdc,
     codec,
+    chromaFormatIdc,
+    codedWidth,
+    codedHeight,
+    width,
+    height,
+    confWin,
   };
 }
 

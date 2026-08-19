@@ -7,7 +7,7 @@
  */
 import { CODECS, BITRATE_PRESETS, MAX_SIZE_PRESETS, FPS_PRESETS, encodeGetClipboard } from "../../shared/protocol.js";
 import { StreamType, PacketFlags } from "../../shared/video-stream.js";
-import { resolveDecoder, createDecoder, decoderLabel, getDecoderOptions, customJsDecoderLabel, h265webDecoderLabel, probeSupport, formatProbeResult, decoderSupports } from "./decoders/index.js";
+import { resolveDecoder, createDecoder, decoderLabel, getDecoderOptions, customJsDecoderLabel, probeSupport, formatProbeResult, decoderSupports } from "./decoders/index.js";
 import { Stats } from "./stats.js";
 import { InputController } from "./input.js";
 import { setupHotkeys, HOTKEYS, deviceKeyHandlers } from "./hotkeys.js";
@@ -37,12 +37,12 @@ class App {
     this._metaGen = 0;
     this.decoderId = null;
     this.decoder = null;
-    this.mediaToken = null;
     this.supportedCodecs = null;
     this._encoderReqId = 0;
     this.deviceDisplay = null;
     this._displayReqId = 0;
     this.codecOptions = "";
+    this._av1Fallback = false;
     this.rateLimit = null; // {bitrate, actual}
     this.deviceSerial = ""; // 当前选中的设备(列表形式)
     this.recording = false; // 服务端录制状态
@@ -100,8 +100,7 @@ class App {
           } else {
             this.dom.bitrateSelect.value = "custom";
             this.dom.customBitrate.value = (cfg.defaultBitrate / 1_000_000).toFixed(1);
-            this.dom.customBitrate.style.display = "inline-block";
-            this.dom.applyBitrateBtn.style.display = "inline-block";
+            if (this.dom.bitrateCustomRow) this.dom.bitrateCustomRow.style.display = "flex";
           }
         }
         if (cfg.defaultMaxSize !== undefined) {
@@ -116,7 +115,13 @@ class App {
         }
         if (cfg.defaultMaxFps !== undefined) {
           const opt = this.dom.fpsSelect.querySelector(`option[value="${cfg.defaultMaxFps}"]`);
-          if (opt) this.dom.fpsSelect.value = String(cfg.defaultMaxFps);
+          if (opt) {
+            this.dom.fpsSelect.value = String(cfg.defaultMaxFps);
+          } else if (cfg.defaultMaxFps > 0) {
+            this.dom.fpsSelect.value = "custom";
+            this.dom.customFps.value = String(cfg.defaultMaxFps);
+            this._syncFpsCustom();
+          }
         }
         if (cfg.logLevel) this._log("服务端配置已加载: logLevel=" + cfg.logLevel);
       } catch (e) {
@@ -137,10 +142,15 @@ class App {
       bitrateSelect: $("bitrate-select"),
       customBitrate: $("custom-bitrate"),
       applyBitrateBtn: $("apply-bitrate"),
+      bitrateCustomRow: $("bitrate-custom-row"),
       sizeSelect: $("size-select"),
       customSize: $("custom-size"),
       applySizeBtn: $("apply-size"),
+      sizeCustomRow: $("size-custom-row"),
       fpsSelect: $("fps-select"),
+      customFps: $("custom-fps"),
+      applyFpsBtn: $("apply-fps"),
+      fpsCustomRow: $("fps-custom-row"),
       decoderSelect: $("decoder-select"),
       probeBtn: $("probe-btn"),
       probeResult: $("probe-result"),
@@ -208,6 +218,10 @@ class App {
       opt.textContent = f.label;
       this.dom.fpsSelect.appendChild(opt);
     }
+    const fpsCustom = document.createElement("option");
+    fpsCustom.value = "custom";
+    fpsCustom.textContent = "自定义…";
+    this.dom.fpsSelect.appendChild(fpsCustom);
     this._buildDecoderOptions();
 
     for (const [k, desc] of HOTKEYS) {
@@ -353,8 +367,7 @@ class App {
 
   _syncSizeCustom() {
     const custom = this.dom.sizeSelect.value === "custom";
-    if (this.dom.customSize) this.dom.customSize.style.display = custom ? "inline-block" : "none";
-    if (this.dom.applySizeBtn) this.dom.applySizeBtn.style.display = custom ? "inline-block" : "none";
+    if (this.dom.sizeCustomRow) this.dom.sizeCustomRow.style.display = custom ? "flex" : "none";
   }
 
   _applyCustomSize() {
@@ -364,6 +377,27 @@ class App {
       return;
     }
     this._applyConfig({ maxSize: Math.round(v) });
+  }
+
+  _onFpsChange() {
+    this._syncFpsCustom();
+    if (this.dom.fpsSelect.value !== "custom") {
+      this._onSessionParamChange();
+    }
+  }
+
+  _syncFpsCustom() {
+    const custom = this.dom.fpsSelect.value === "custom";
+    if (this.dom.fpsCustomRow) this.dom.fpsCustomRow.style.display = custom ? "flex" : "none";
+  }
+
+  _applyCustomFps() {
+    const v = Number(this.dom.customFps.value);
+    if (!Number.isFinite(v) || v <= 0) {
+      this._toast("请输入有效的帧率(FPS)", 3000);
+      return;
+    }
+    this._applyConfig({ maxFps: Math.round(v) });
   }
 
   _bindUi() {
@@ -381,7 +415,8 @@ class App {
     d.probeBtn.addEventListener("click", () => this.showProbe());
     d.sizeSelect.addEventListener("change", () => this._onSizeChange());
     d.applySizeBtn.addEventListener("click", () => this._applyCustomSize());
-    d.fpsSelect.addEventListener("change", () => this._onSessionParamChange());
+    d.fpsSelect.addEventListener("change", () => this._onFpsChange());
+    d.applyFpsBtn.addEventListener("click", () => this._applyCustomFps());
     d.themeModeBtn.addEventListener("click", () => this._toggleThemeMode());
 
     const toolbar = {
@@ -488,7 +523,6 @@ class App {
   _onWsJson(msg) {
     switch (msg.type) {
       case "ready":
-        if (msg.mediaToken) this.mediaToken = msg.mediaToken;
         this._log(`已连接服务端(在线客户端 ${msg.clientCount || 1} 个)`);
         break;
       case "state":
@@ -530,6 +564,21 @@ class App {
         }
         break;
       case "log":
+        // AV1 设备端编码器不可用(例如 c2.android.av1.encoder 在部分设备上抛
+        // IllegalArgumentException)时,自动切换 H.265,避免一直黑屏。
+        if (
+          msg.level === "error" &&
+          this.meta.codec === "av1" &&
+          !this._av1Fallback &&
+          /Capture\/encoding error|IllegalArgumentException/.test(msg.message || "")
+        ) {
+          this._av1Fallback = true;
+          this._toast("AV1 编码器在当前设备不可用,自动切换 H.265", 6000);
+          setTimeout(() => {
+            if (this.dom.codecSelect) this.dom.codecSelect.value = "h265";
+            this._onCodecOrDecoderChange();
+          }, 300);
+        }
         this._log(msg.level === "error" || msg.level === "warn" ? "⚠ " + msg.message : msg.message);
         if (msg.level === "warn") this._toast(msg.message, 6000);
         break;
@@ -583,18 +632,6 @@ class App {
     const gen = ++this._metaGen;
     this._setSessionState("connected");
 
-    // WebCodecs 支持在下一个 config 包到达时自动重建解码器;旋转/切分辨率时
-    // 不必先销毁,避免旧解码器销毁/新解码器初始化期间的竞态与报错。
-    if (this.decoderId === "webcodecs" && this.decoder && this.applied.codec === codec) {
-      this.applied = { codec, width, height };
-      this.dom.canvas.width = width;
-      this.dom.canvas.height = height;
-      const tip = $("empty-tip");
-      if (tip) tip.style.display = "none";
-      this._syncStatusBar();
-      return;
-    }
-
     this._destroyDecoder();
     this.dom.videoEl.pause();
     const isMse = this.decoderId === "mse";
@@ -610,7 +647,6 @@ class App {
         codec,
         canvas: this.dom.canvas,
         videoEl: this.dom.videoEl,
-        mediaToken: this.mediaToken,
         onFrame: (info) => this.stats.addFrame(info || {}),
         onError: (m) => {
             this.stats.addDecodeError();
@@ -629,14 +665,12 @@ class App {
       this.applied = { codec, width, height };
       const label = this.decoderId === "custom-js"
         ? customJsDecoderLabel(codec)
-        : this.decoderId === "h265web"
-          ? h265webDecoderLabel(codec)
-          : decoderLabel(this.decoderId);
+        : decoderLabel(this.decoderId);
       this.decoderLabel = label;
       this.stats.setDecoder(label + (this.codecOptions ? " (profile=baseline)" : ""));
       this._syncStatusBar();
       this._log(`视频流就绪:${codec.toUpperCase()} ${width}x${height} 解码器=${label}`);
-      if ((this.decoderId === "custom-js" || this.decoderId === "h265web") && width * height > 1280 * 720) {
+      if (this.decoderId === "custom-js" && width * height > 1280 * 720) {
         this._toast("当前为 JS/WASM 软解,高分辨率下可能有明显延迟;建议降低分辨率或改用 WebCodecs", 6000);
       }
     } catch (e) {
@@ -670,11 +704,15 @@ class App {
     if (this.dom.sizeSelect.value === "custom") {
       maxSize = Number(this.dom.customSize.value) || 0;
     }
+    let maxFps = Number(this.dom.fpsSelect.value) || 0;
+    if (this.dom.fpsSelect.value === "custom") {
+      maxFps = Number(this.dom.customFps.value) || 0;
+    }
     return {
       codec: this.dom.codecSelect.value,
       bitrate,
       maxSize,
-      maxFps: Number(this.dom.fpsSelect.value) || 0,
+      maxFps,
       decoder: this.dom.decoderSelect.value,
     };
   }
@@ -737,12 +775,10 @@ class App {
   _onBitrateChange() {
     const v = this.dom.bitrateSelect.value;
     if (v === "custom") {
-      this.dom.customBitrate.style.display = "inline-block";
-      this.dom.applyBitrateBtn.style.display = "inline-block";
+      if (this.dom.bitrateCustomRow) this.dom.bitrateCustomRow.style.display = "flex";
       return;
     }
-    this.dom.customBitrate.style.display = "none";
-    this.dom.applyBitrateBtn.style.display = "none";
+    if (this.dom.bitrateCustomRow) this.dom.bitrateCustomRow.style.display = "none";
     this._applyConfig({ bitrate: Number(v) });
   }
 
@@ -756,10 +792,11 @@ class App {
   }
 
   async _onCodecOrDecoderChange() {
+    this._av1Fallback = false;
     this._buildDecoderOptions();
     const custom = this.dom.bitrateSelect.value === "custom";
-    this.dom.customBitrate.style.display = custom ? "inline-block" : "none";
-    this.dom.applyBitrateBtn.style.display = custom ? "inline-block" : "none";
+    if (this.dom.bitrateCustomRow) this.dom.bitrateCustomRow.style.display = custom ? "flex" : "none";
+    this._syncFpsCustom();
     const params = this._currentParams();
     if (params.decoder === "custom-js" && !["h264", "h265"].includes(params.codec)) {
       this._toast("自定义JS解码支持 H.264/H.265,当前编码需使用 WebCodecs", 5000);
@@ -800,7 +837,6 @@ class App {
     const row = (name, ok) => (ok ? `<span class="ok">✓ ${name}</span>` : `<span class="no">✗ ${name}</span>`);
     const videoRows = [
       "WebCodecs(原生): " + row("可用", probe.webcodecs[codec]),
-      "h265web.js: " + row("可用", probe.h265web[codec]),
       "MediaSource(回退): " + row("可用", probe.mse[codec]),
       "自定义JS/WASM: " + row("可用", probe.customJs[codec]),
     ];
@@ -1127,7 +1163,10 @@ class App {
     // 跟随系统:监听系统主题变化
     if (window.matchMedia) {
       window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-        if (this._themeAuto) this._applyTheme();
+        if (this._themeAuto) {
+          this._applyTheme();
+          this._renderThemeUi();
+        }
       });
     }
   }

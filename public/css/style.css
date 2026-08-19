@@ -233,6 +233,9 @@ button.danger:hover:not(:disabled) { background: rgba(229, 72, 77, 0.12); }
 .row select { flex: 1; margin-top: 0; }
 .row input { flex: 1; margin-top: 0; }
 .row button { white-space: nowrap; }
+.custom-row { display: flex; gap: 6px; margin-top: 6px; }
+.custom-row input { flex: 1; margin-top: 0; }
+.custom-row button { white-space: nowrap; }
 
 /* 设备列表(替代下拉框) */
 .device-list {

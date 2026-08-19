@@ -106,20 +106,10 @@ test("静态页面与共享模块可访问", async () => {
   assert.equal(res.status, 200);
   const html = await res.text();
   assert.ok(html.includes("Web Scrcpy"));
-  for (const u of ["/js/app.js", "/js/decoders/libde265.js", "/js/decoders/h265web.js", "/shared/protocol.js", "/vendor/libde265/libde265.mjs", "/vendor/libde265/libde265.wasm", "/vendor/h265web/h265web.js", "/vendor/h265web/h265web_wasm.js", "/vendor/h265web/h265web_wasm.wasm", "/vendor/h265web/extjs.js", "/vendor/h265web/extwasm.js", "/vendor/h265web/extwasm.wasm", "/avc.wasm"]) {
+  for (const u of ["/js/app.js", "/js/decoders/libde265.js", "/shared/protocol.js", "/vendor/libde265/libde265.mjs", "/vendor/libde265/libde265.wasm", "/avc.wasm"]) {
     const r = await fetch(`http://127.0.0.1:${port}${u}`);
     assert.equal(r.status, 200, u);
   }
-});
-
-test("/ws-raw 裸流 WebSocket 校验 token", async () => {
-  const bad = new WebSocket(`ws://127.0.0.1:${port}/ws-raw?token=bad`);
-  const result = await new Promise((resolve, reject) => {
-    bad.on("open", () => {});
-    bad.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
-    bad.on("error", reject);
-  });
-  assert.equal(result.code, 4001);
 });
 
 test("设备编码器检测 API", async () => {

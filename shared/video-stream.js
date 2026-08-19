@@ -99,6 +99,17 @@ export class VideoStreamParser {
         this.onSession && this.onSession({ width, height, clientResized });
         this.phase = "packet";
       } else if (this.phase === "packet") {
+        // session 头可能正好落在一个新的 TCP chunk 开头;进入 packet 解析前也要检测,
+        // 否则会把 session 头误当普通包头发送给前端。
+        if (this.buffer.length >= 4) {
+          const startFlags = read32be(this.buffer, 0);
+          const isSessionStart =
+            (startFlags & 0x80000000) !== 0 && (startFlags & ~0x80000001) === 0;
+          if (isSessionStart) {
+            this.phase = "session";
+            continue;
+          }
+        }
         if (this.buffer.length < 12) return;
         const ptsFlags = read64beBig(this.buffer, 0);
         const size = read32be(this.buffer, 8);
@@ -117,9 +128,15 @@ export class VideoStreamParser {
         if (config) flags |= PacketFlags.CONFIG;
         if (keyFrame) flags |= PacketFlags.KEY_FRAME;
         this.onPacket && this.onPacket({ flags, pts, data: payload });
-        // session 头也可能在包序列中间出现(如分辨率变化),回到 session 阶段检测
-        if (this.buffer.length >= 1 && (this.buffer[0] & 0x80)) {
-          this.phase = "session";
+        // session 头也可能在包序列中间出现(如分辨率变化),回到 session 阶段检测。
+        // 注意:不能只判断首字节最高位,否则 H.264/H.265 负载中任意 >=0x80 的字节
+        // 都会误判为 session 头(旋转后会出现巨大错误宽高)。
+        if (this.buffer.length >= 4) {
+          const flags = read32be(this.buffer, 0);
+          const isSessionFlags = (flags & 0x80000000) !== 0 && (flags & ~0x80000001) === 0;
+          if (isSessionFlags) {
+            this.phase = "session";
+          }
         }
       } else {
         return; // disabled
