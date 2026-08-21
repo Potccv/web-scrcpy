@@ -63,7 +63,7 @@
         <div class="row">
           <button id="refresh-devices" title="刷新设备列表">⟳ 刷新</button>
           <button id="disconnect-btn" title="断开当前选中的设备">断开</button>
-          <button id="rename-btn" title="给当前设备命名(别名保存在本机)">✏️ 改名</button>
+          <button id="rename-btn" title="给当前设备命名(别名保存在服务器,所有用户可见)">✏️ 改名</button>
         </div>
         <p class="hint">手机需开启「无线调试」(Android 11+)或先 USB 连接执行 <code>adb tcpip 5555</code>;模拟器自动出现在列表。</p>
       </section>
@@ -135,6 +135,9 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <!-- 隐藏输入框:接收电脑系统中文输入法,输入完成后通过 INJECT_TEXT 注入安卓 -->
+  <input id="ime-input" class="ime-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
 
   <script type="module" src="/js/app.js"></script>
 </body>

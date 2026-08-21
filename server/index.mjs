@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { ScrcpySession } from "./session.mjs";
 import * as adb from "./adb.mjs";
+import { getAliases, setAlias } from "./aliases.mjs";
 import { decodeDeviceMessage, encodeGetClipboard } from "../shared/protocol.js";
 import { StreamType, PacketFlags } from "../shared/video-stream.js";
 import { SessionRecorder, RECORDINGS_DIR, setRecordingsDir, getDiskFree, cleanupRecordings } from "./recorder.mjs";
@@ -267,6 +268,19 @@ function sendJson(ws, obj) {
       ws.send(JSON.stringify(obj));
     } catch {
       // 客户端可能已断开
+    }
+  }
+}
+
+function broadcastAliases(aliases) {
+  const payload = JSON.stringify({ type: "aliases", aliases });
+  for (const client of clients.values()) {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      try {
+        client.ws.send(payload);
+      } catch {
+        // 客户端可能已断开
+      }
     }
   }
 }
@@ -746,6 +760,7 @@ async function handleApi(req, res, url) {
       clientCount: clients.size,
       serverVersion: SERVER_VERSION,
       jarPresent: fs.existsSync(path.join(BIN_DIR, "scrcpy-server.jar")),
+      aliases: getAliases(),
     });
   }
 
@@ -769,7 +784,7 @@ async function handleApi(req, res, url) {
 
   if (method === "GET" && p === "/api/devices") {
     const devices = await adb.listDevices();
-    return sendRes(res, 200, { devices });
+    return sendRes(res, 200, { devices, aliases: getAliases() });
   }
 
   if (method === "GET" && p === "/api/device/encoders") {
@@ -797,6 +812,19 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const result = await adb.disconnect(body.serial);
     return sendRes(res, 200, result);
+  }
+
+  if (method === "GET" && p === "/api/aliases") {
+    return sendRes(res, 200, { aliases: getAliases() });
+  }
+
+  if (method === "PUT" && p === "/api/aliases") {
+    const body = await readBody(req);
+    const serial = String(body.serial || "").trim();
+    if (!serial) return sendRes(res, 400, { error: "缺少 serial 参数" });
+    const aliases = setAlias(serial, body.alias);
+    broadcastAliases(aliases);
+    return sendRes(res, 200, { aliases });
   }
 
   return sendRes(res, 404, { error: "Not Found" });

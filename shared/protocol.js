@@ -485,6 +485,32 @@ export function encodeSetClipboard(sequence, text, paste = false) {
   return buf;
 }
 
+/** 创建 UHID 键盘设备(用于模拟物理键盘,可隐藏安卓软键盘)。 */
+export function encodeUhidCreate(id, vendorId, productId, name, reportDesc) {
+  const nameBytes = new TextEncoder().encode(name);
+  const cutName = Math.min(nameBytes.length, 127);
+  const desc = reportDesc instanceof Uint8Array ? reportDesc : new Uint8Array(reportDesc);
+  const buf = new Uint8Array(1 + 2 + 2 + 2 + 1 + cutName + 2 + desc.length);
+  buf[0] = CtrlMsgType.UHID_CREATE;
+  write16be(buf, 1, id);
+  write16be(buf, 3, vendorId);
+  write16be(buf, 5, productId);
+  buf[7] = cutName;
+  buf.set(nameBytes.subarray(0, cutName), 8);
+  const idx = 8 + cutName;
+  write16be(buf, idx, desc.length);
+  buf.set(desc, idx + 2);
+  return buf;
+}
+
+/** 销毁 UHID 设备。返回 3 字节。 */
+export function encodeUhidDestroy(id) {
+  const buf = new Uint8Array(3);
+  buf[0] = CtrlMsgType.UHID_DESTROY;
+  write16be(buf, 1, id);
+  return buf;
+}
+
 /** 开关屏幕电源。返回 2 字节。 */
 export function encodeSetDisplayPower(on) {
   const buf = new Uint8Array(2);

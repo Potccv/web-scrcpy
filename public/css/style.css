@@ -320,7 +320,8 @@ button.danger:hover:not(:disabled) { background: rgba(229, 72, 77, 0.12); }
 /* 竖向滚动条 */
 .log::-webkit-scrollbar,
 .help-overlay::-webkit-scrollbar,
-.sidebar::-webkit-scrollbar {
+.sidebar::-webkit-scrollbar,
+.device-list::-webkit-scrollbar {
   width: 6px;
 }
 /* 横向滚动条(顶栏、状态栏) */
@@ -331,6 +332,7 @@ button.danger:hover:not(:disabled) { background: rgba(229, 72, 77, 0.12); }
 .log::-webkit-scrollbar-thumb,
 .help-overlay::-webkit-scrollbar-thumb,
 .sidebar::-webkit-scrollbar-thumb,
+.device-list::-webkit-scrollbar-thumb,
 .topbar::-webkit-scrollbar-thumb,
 .statusbar::-webkit-scrollbar-thumb {
   background: rgba(128, 128, 128, 0.4);
@@ -339,6 +341,7 @@ button.danger:hover:not(:disabled) { background: rgba(229, 72, 77, 0.12); }
 .log::-webkit-scrollbar-track,
 .help-overlay::-webkit-scrollbar-track,
 .sidebar::-webkit-scrollbar-track,
+.device-list::-webkit-scrollbar-track,
 .topbar::-webkit-scrollbar-track,
 .statusbar::-webkit-scrollbar-track {
   background: transparent;
@@ -488,6 +491,22 @@ button.danger:hover:not(:disabled) { background: rgba(229, 72, 77, 0.12); }
   max-width: 80vw;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- 隐藏输入框(用于电脑输入法/中文输入) ---------- */
+.ime-input {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 2px;
+  height: 20px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 16px;
+  background: transparent;
+  z-index: -1;
+}
 
 /* ---------- 窄屏 ---------- */
 @media (max-width: 820px) {

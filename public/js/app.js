@@ -14,6 +14,36 @@ import { setupHotkeys, HOTKEYS, deviceKeyHandlers } from "./hotkeys.js";
 
 const $ = (id) => document.getElementById(id);
 
+/** 写入电脑剪贴板;优先 navigator.clipboard,非安全上下文回退 execCommand('copy') */
+function writeClipboardText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackWriteClipboardText(text));
+  }
+  return fallbackWriteClipboardText(text);
+}
+
+function fallbackWriteClipboardText(text) {
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      if (ok) resolve();
+      else reject(new Error("复制失败"));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 /** 触发浏览器下载 */
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -51,6 +81,11 @@ class App {
     this._lastToast = null;
     this._lastPts = 0;
     this.status = null;
+    this._clipboardButtonPending = false;
+    this._clipboardButtonToastTimer = null;
+    this._imeComposing = false;
+    this._suppressNextImeInput = false;
+    this._aliases = {};
       this.configDefaults = null;
 
     this.stats = new Stats($("stats-overlay"));
@@ -71,6 +106,7 @@ class App {
       await this._loadConfigDefaults();
     this._bindUi();
     this.input.attach($("screen-canvas"), $("screen-video"));
+    this._bindImeInput();
     this._setupHotkeys();
     this._connectWs();
     this._initTheme();
@@ -168,6 +204,7 @@ class App {
       statusBitrate: $("status-bitrate"),
       statusDecoder: $("status-decoder"),
       toast: $("toast"),
+      imeInput: $("ime-input"),
       logBox: $("log-box"),
       hotkeyList: $("hotkey-list"),
       screenshotBtn: $("screenshot"),
@@ -428,7 +465,14 @@ class App {
       fullscreenBtn: () => this.toggleFullscreen(),
       statsBtn: () => this.toggleStats(),
       helpBtn: () => this.toggleHelp(),
-      getClipboardBtn: () => this.sendControl(encodeGetClipboard(1)),
+      getClipboardBtn: () => {
+        this._clipboardButtonPending = true;
+        clearTimeout(this._clipboardButtonToastTimer);
+        this._clipboardButtonToastTimer = setTimeout(() => {
+          this._clipboardButtonPending = false;
+        }, 3000);
+        this.sendControl(encodeGetClipboard(1));
+      },
       volUpBtn: () => this.sendControl(deviceKeyHandlers(this.sendControl.bind(this)).volumeUp()),
       volDownBtn: () => this.sendControl(deviceKeyHandlers(this.sendControl.bind(this)).volumeDown()),
       recordBtn: () => this.toggleRecording(),
@@ -436,6 +480,54 @@ class App {
     };
     for (const [id, fn] of Object.entries(toolbar)) {
       d[id].addEventListener("click", fn);
+    }
+  }
+
+  _bindImeInput() {
+    const ime = this.dom.imeInput;
+    if (!ime) return;
+
+    // 点击串流画面时聚焦隐藏输入框,让电脑输入法接管中文输入
+    this.dom.viewport.addEventListener("pointerdown", (e) => this._focusImeInput(e));
+
+    ime.addEventListener("compositionstart", () => {
+      this._imeComposing = true;
+    });
+    ime.addEventListener("compositionend", (e) => {
+      this._imeComposing = false;
+      // 部分浏览器在 compositionend 后还会补一个 input 事件,短暂屏蔽避免重复注入
+      this._suppressNextImeInput = true;
+      setTimeout(() => {
+        this._suppressNextImeInput = false;
+      }, 100);
+      const text = e.data || ime.value;
+      ime.value = "";
+      if (text) this.input.pasteText(text);
+    });
+    ime.addEventListener("input", () => {
+      if (this._imeComposing) return;
+      if (this._suppressNextImeInput) {
+        this._suppressNextImeInput = false;
+        ime.value = "";
+        return;
+      }
+      const text = ime.value;
+      ime.value = "";
+      if (text) this.input.pasteText(text);
+    });
+  }
+
+  _focusImeInput(e) {
+    const ime = this.dom.imeInput;
+    if (!ime) return;
+    // 把隐藏输入框移到点击位置附近,这样电脑输入法的候选词窗口会出现在可见区域
+    if (e && typeof e.clientX === "number" && typeof e.clientY === "number") {
+      ime.style.left = `${e.clientX}px`;
+      ime.style.top = `${e.clientY}px`;
+    }
+    if (document.activeElement !== ime) {
+      ime.value = "";
+      ime.focus({ preventScroll: true });
     }
   }
 
@@ -549,9 +641,18 @@ class App {
       case "record":
         this._onRecordMsg(msg);
         break;
+      case "aliases":
+        if (msg.aliases) {
+          this._aliases = msg.aliases;
+          if (this.status && this.status.devices) {
+            this._populateDevices(this.status.devices);
+          }
+        }
+        break;
       case "disconnected":
         this._toast("设备连接断开:" + (msg.reason || ""), 4000);
         this.sessionActive = false;
+        this.input.destroyUhidKeyboard();
         this._destroyDecoder();
         this.rateLimit = null;
         this._setSessionState("idle");
@@ -596,10 +697,13 @@ class App {
       this.sessionActive = true;
       this._setSessionState("connected");
       this._syncStatusBar(msg);
+      this.input.createUhidKeyboard();
     } else if (st === "restarting") {
+      this.input.destroyUhidKeyboard();
       this._setSessionState("restarting");
     } else if (st === "stopped") {
       this.sessionActive = false;
+      this.input.destroyUhidKeyboard();
       this._setSessionState("idle");
       this._destroyDecoder();
       this.meta = { codec: null, width: null, height: null, deviceName: null };
@@ -681,12 +785,15 @@ class App {
 
   _onDeviceMsg(msg) {
     if (msg.kind === "clipboard") {
-      this._toast("设备剪贴板已同步", 2500);
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(msg.text).catch(() => {});
+      // 只有用户主动点击“剪贴板”按钮时才提示;自动同步(安卓剪贴板变化/电脑复制粘贴)不打扰
+      if (this._clipboardButtonPending) {
+        this._toast("设备剪贴板已同步", 2500);
+        this._clipboardButtonPending = false;
+        clearTimeout(this._clipboardButtonToastTimer);
       }
+      writeClipboardText(msg.text).catch(() => this._toast("无法写入电脑剪贴板", 3000));
     } else if (msg.kind === "ackClipboard") {
-      this._toast("设备剪贴板已更新", 2500);
+      // 电脑→安卓剪贴板同步成功的确认,静默处理,不弹提示
     }
   }
 
@@ -1216,6 +1323,7 @@ class App {
     try {
       const res = await fetch("/api/status");
       this.status = await res.json();
+      if (this.status.aliases) this._aliases = this.status.aliases;
       if (this.status.adb) {
         this._toast("⚠ " + this.status.adb, 8000);
       }
@@ -1231,6 +1339,7 @@ class App {
     try {
       const res = await fetch("/api/devices");
       const json = await res.json();
+      if (json.aliases) this._aliases = json.aliases;
       this._populateDevices(json.devices || []);
     } catch (e) {
       this._toast("获取设备列表失败:" + e.message, 4000);
@@ -1238,38 +1347,39 @@ class App {
   }
 
   // -------------------------------------------------------------------------
-  // 设备别名(localStorage 持久化)
+  // 设备别名(服务端持久化,所有用户共享)
   // -------------------------------------------------------------------------
 
-  _aliasMap() {
+  async _saveAlias(serial, alias) {
     try {
-      return JSON.parse(localStorage.getItem("scrcpy-device-aliases") || "{}");
-    } catch {
-      return {};
+      const res = await fetch("/api/aliases", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serial, alias }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "保存失败");
+      this._aliases = json.aliases || {};
+      return true;
+    } catch (e) {
+      this._toast("保存别名失败:" + e.message, 4000);
+      return false;
     }
   }
 
-  _saveAlias(serial, alias) {
-    const m = this._aliasMap();
-    if (alias) m[serial] = alias;
-    else delete m[serial];
-    try {
-      localStorage.setItem("scrcpy-device-aliases", JSON.stringify(m));
-    } catch {}
-  }
-
   /** 给当前选中的设备命名(弹窗输入,留空清除) */
-  renameDevice() {
+  async renameDevice() {
     const serial = this.deviceSerial;
     if (!serial) {
       this._toast("请先选择要命名的设备", 3000);
       return;
     }
-    const current = this._aliasMap()[serial] || "";
+    const current = this._aliases[serial] || "";
     const alias = prompt(`给设备 ${serial} 起个别名(留空清除):`, current);
     if (alias === null) return;
     const name = alias.trim();
-    this._saveAlias(serial, name);
+    const ok = await this._saveAlias(serial, name);
+    if (!ok) return;
     if (this.status && this.status.devices) {
       this._populateDevices(this.status.devices);
     }
@@ -1279,7 +1389,7 @@ class App {
   _populateDevices(devices) {
     const list = this.dom.deviceList;
     list.innerHTML = "";
-    const aliases = this._aliasMap();
+    const aliases = this._aliases;
     const prev = this.deviceSerial;
     let first = null;
     for (const d of devices) {

@@ -9,6 +9,9 @@ import {
   encodeScrollEvent,
   encodeInjectKeycode,
   encodeInjectText,
+  encodeSetClipboard,
+  encodeUhidCreate,
+  encodeUhidDestroy,
   KeyEventAction,
   TouchAction,
   MotionButton,
@@ -16,6 +19,17 @@ import {
   POINTER_ID_MOUSE,
   KeyCode,
 } from "../../shared/protocol.js";
+
+/** 标准 USB HID 键盘报告描述符(8 字节报告:modifier/reserved/6 keys) */
+const UHID_KEYBOARD_DESCRIPTOR = new Uint8Array([
+  0x05, 0x01, 0x09, 0x06, 0xa1, 0x01,
+  0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+  0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+  0x95, 0x05, 0x75, 0x01, 0x05, 0x08, 0x19, 0x01, 0x29, 0x05, 0x91, 0x02,
+  0x95, 0x01, 0x75, 0x03, 0x91, 0x01,
+  0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+  0xc0,
+]);
 
 export class InputController {
   /**
@@ -30,6 +44,10 @@ export class InputController {
     this.scrollAccY = 0;
     this.scrollAccX = 0;
     this.pinch = null; // Ctrl+拖拽缩放暂未实现
+    this.clipboardSeq = 0;
+    this._lastPcClipboardText = "";
+    this._suppressKeyUpV = false;
+    this._uhidCreated = false;
   }
 
   /**
@@ -55,6 +73,10 @@ export class InputController {
     // preventDefault,这里只转发未被拦截的按键
     document.addEventListener("keydown", (e) => this._onKeyDown(e));
     document.addEventListener("keyup", (e) => this._onKeyUp(e));
+
+    // 电脑端复制/剪切时同步到安卓剪贴板
+    document.addEventListener("copy", (e) => this._onCopyOrCut(e));
+    document.addEventListener("cut", (e) => this._onCopyOrCut(e));
   }
 
   _deviceSize() {
@@ -168,7 +190,9 @@ export class InputController {
     if (!p) return;
 
     // 滚轮一格 ≈ ±100 浏览器单位;累积到整格再发送,与 scrcpy 的 ±1/格 对齐
-    this.scrollAccY += e.deltaY;
+    // 浏览器 WheelEvent.deltaY 向下为正,而 Android AXIS_VSCROLL 向上为正,
+    // 所以纵向取反;横向两者都是向右为正,不需要取反。
+    this.scrollAccY += -e.deltaY;
     this.scrollAccX += e.deltaX;
     const dy = Math.trunc(this.scrollAccY / 100);
     const dx = Math.trunc(this.scrollAccX / 100);
@@ -181,6 +205,99 @@ export class InputController {
     this.deps.sendControl(
       encodeScrollEvent(p.x, p.y, p.size.width, p.size.height, hscroll, vscroll, 0)
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // 剪贴板同步(电脑 → 安卓)
+  // -------------------------------------------------------------------------
+
+  _sendClipboardToDevice(text, paste = false) {
+    if (!text || !this._isActive()) return;
+    const seq = ++this.clipboardSeq;
+    this.deps.sendControl(encodeSetClipboard(seq, text, paste));
+  }
+
+  _copyTextFromEvent(e) {
+    try {
+      if (e.clipboardData && typeof e.clipboardData.getData === "function") {
+        const t = e.clipboardData.getData("text/plain");
+        if (t) return t;
+      }
+    } catch {}
+    const el = document.activeElement;
+    if (
+      el &&
+      (el.tagName === "TEXTAREA" ||
+        (el.tagName === "INPUT" && /^(text|search|url|tel|password|email|number)$/i.test(el.type)))
+    ) {
+      const start = el.selectionStart ?? 0;
+      const end = el.selectionEnd ?? 0;
+      if (end > start) return el.value.substring(start, end);
+    }
+    const sel = window.getSelection && window.getSelection();
+    return sel ? sel.toString() : "";
+  }
+
+  _onCopyOrCut(e) {
+    if (!this._isActive()) return;
+    const text = this._copyTextFromEvent(e);
+    if (text) {
+      this._lastPcClipboardText = text;
+      this._sendClipboardToDevice(text, false);
+    }
+  }
+
+  async _readPcClipboardText() {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const t = await navigator.clipboard.readText();
+        if (t) return t;
+      } catch {}
+    }
+    // 非安全上下文(LAN HTTP)没有 navigator.clipboard 时,用隐藏文本框 + execCommand('paste') 读取
+    if (typeof document === "undefined") return Promise.resolve("");
+    return new Promise((resolve) => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        let settled = false;
+        const finish = (text) => {
+          if (settled) return;
+          settled = true;
+          ta.remove();
+          resolve(text || "");
+        };
+        ta.addEventListener("paste", (e) => {
+          e.preventDefault();
+          const text = e.clipboardData && e.clipboardData.getData("text/plain");
+          finish(text);
+        });
+        ta.focus();
+        document.execCommand("paste");
+        setTimeout(() => finish(""), 80);
+      } catch {
+        resolve("");
+      }
+    });
+  }
+
+  async _pasteFromPcClipboard(e) {
+    if (!this._isActive()) return;
+    let text = this._lastPcClipboardText || "";
+    const read = await this._readPcClipboardText();
+    if (read) text = read;
+    if (text) {
+      this._lastPcClipboardText = text;
+      this._sendClipboardToDevice(text, true);
+    } else {
+      // 读不到电脑剪贴板时退回普通 Ctrl+V,让安卓粘贴自身剪贴板
+      const kc = this._keycodeFromPrintable("v");
+      if (kc !== null) this._sendKey(kc, e);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -202,13 +319,45 @@ export class InputController {
     this.deps.sendControl(encodeInjectKeycode(KeyEventAction.UP, keycode, 0, meta));
   }
 
+  /** 注入一段文本到安卓当前焦点输入框(支持中文等 Unicode)。 */
+  injectText(text) {
+    if (!text || !this._isActive()) return;
+    this.deps.sendControl(encodeInjectText(text));
+  }
+
+  /** 通过剪贴板 + 粘贴将文本输入安卓(中文等 INJECT_TEXT 不支持的字符更可靠)。 */
+  pasteText(text) {
+    if (!text || !this._isActive()) return;
+    this._sendClipboardToDevice(text, true);
+  }
+
+  /** 创建 UHID 物理键盘,使安卓系统认为已连接硬件键盘,从而隐藏软键盘。 */
+  createUhidKeyboard() {
+    // 不需要等到视频尺寸就绪,只要会话已激活即可创建设备
+    if (!this.deps.isActive() || this._uhidCreated) return;
+    this._uhidCreated = true;
+    this.deps.sendControl(
+      encodeUhidCreate(0, 0x18d1, 0x0212, "web-scrcpy keyboard", UHID_KEYBOARD_DESCRIPTOR)
+    );
+  }
+
+  /** 销毁 UHID 键盘。 */
+  destroyUhidKeyboard() {
+    if (!this._uhidCreated) return;
+    this._uhidCreated = false;
+    this.deps.sendControl(encodeUhidDestroy(0));
+  }
+
   _onKeyDown(e) {
     // UI 快捷键(由 app/hotkeys 处理)不转发给设备
     if (e.defaultPrevented) return;
     if (!this._isActive()) return;
-    // 焦点在输入控件时不转发
+    // 输入法组合中:交给浏览器隐藏输入框处理,不转发给安卓
+    if (e.isComposing || e.keyCode === 229) return;
+    // 焦点在普通输入控件时不转发;隐藏 IME 输入框除外
     const tag = (e.target && e.target.tagName) || "";
-    if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+    const isImeInput = e.target && e.target.id === "ime-input";
+    if (!isImeInput && ["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
 
     const key = e.key;
     const special = {
@@ -233,6 +382,14 @@ export class InputController {
     if (special !== undefined) {
       e.preventDefault();
       this._sendKey(special, e);
+      return;
+    }
+
+    // Ctrl/Cmd+V:先把电脑剪贴板同步到安卓并触发粘贴
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && key.toLowerCase() === "v") {
+      e.preventDefault();
+      this._suppressKeyUpV = true;
+      this._pasteFromPcClipboard(e);
       return;
     }
 
@@ -280,8 +437,16 @@ export class InputController {
   _onKeyUp(e) {
     if (e.defaultPrevented) return;
     if (!this._isActive()) return;
+    // 输入法组合中:不转发 keyup
+    if (e.isComposing || e.keyCode === 229) return;
+    // Ctrl/Cmd+V 已在 keydown 转成剪贴板同步,不再向设备发送 keyup
+    if (this._suppressKeyUpV && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+      this._suppressKeyUpV = false;
+      return;
+    }
     const tag = (e.target && e.target.tagName) || "";
-    if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+    const isImeInput = e.target && e.target.id === "ime-input";
+    if (!isImeInput && ["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
     const special = {
       Enter: KeyCode.ENTER,
       Backspace: KeyCode.DEL,

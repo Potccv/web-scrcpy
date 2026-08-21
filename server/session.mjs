@@ -74,6 +74,7 @@ export class ScrcpySession {
     this._videoBuffer = Buffer.alloc(0);
     this._controlBuffer = Buffer.alloc(0);
     this._deviceNameRead = false;
+    this.sdkInt = null;
   }
 
   get codec() {
@@ -106,6 +107,7 @@ export class ScrcpySession {
     try {
       await this._pushServer();
       await this._openTunnel();
+      await this._detectSdk();
       this._spawnServerProcess();
       await this._acceptConnections();
       // 点亮设备屏幕(与 scrcpy power_on 行为一致)
@@ -151,6 +153,16 @@ export class ScrcpySession {
     }
   }
 
+  async _detectSdk() {
+    try {
+      const sdk = await adb.getprop(this.serial, "ro.build.version.sdk");
+      const n = sdk ? parseInt(sdk, 10) : NaN;
+      this.sdkInt = Number.isFinite(n) ? n : null;
+    } catch {
+      this.sdkInt = null;
+    }
+  }
+
   _spawnServerProcess() {
     const p = this.params;
     const args = [this.version, `scid=${this.scid}`, "log_level=info"];
@@ -161,6 +173,12 @@ export class ScrcpySession {
     args.push("cleanup=false");
     if (p.maxSize) args.push(`max_size=${p.maxSize}`);
     if (p.maxFps) args.push(`max_fps=${p.maxFps}`);
+    // 隐藏安卓系统输入法,改由网页端输入框 + 电脑输入法输入(仅 Android 10+)
+    if (this.sdkInt !== null && this.sdkInt >= 29) {
+      args.push("display_ime_policy=hide");
+    } else if (this.sdkInt !== null) {
+      this._log(`当前 Android SDK ${this.sdkInt} < 29,不支持隐藏输入法`);
+    }
     if (p.codecOptions) {
       validateParam(p.codecOptions);
       args.push(`video_codec_options=${p.codecOptions}`);

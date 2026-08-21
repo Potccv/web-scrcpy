@@ -146,6 +146,15 @@ function main() {
         process.stdout.write("SurfaceOrientation: 0\n");
         process.exit(0);
       }
+      // 模拟 getprop
+      if (args[3] === "getprop") {
+        if (args[4] === "ro.build.version.sdk") {
+          process.stdout.write("34\n");
+        } else {
+          process.stdout.write("unknown\n");
+        }
+        process.exit(0);
+      }
       // 模拟 scrcpy --list-encoders:列出设备支持的编码器后退出
       if (args.includes("list_encoders=true")) {
         process.stdout.write(
@@ -176,10 +185,6 @@ function main() {
       tryConnect();
       setInterval(() => {}, 1000);
       return;
-    }
-    if (sub === "getprop") {
-      process.stdout.write("unknown\n");
-      process.exit(0);
     }
     if (sub === "connect" || sub === "disconnect") {
       process.stdout.write("connected to 127.0.0.1:5555\n");

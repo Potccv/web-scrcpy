@@ -137,6 +137,40 @@ test("设备列表 API", async () => {
   assert.ok(json.devices.some((d) => d.serial === "emulator-5554" && d.state === "device"));
 });
 
+test("设备别名 API 服务端共享", async () => {
+  const serial = "alias-e2e-" + Date.now();
+  const alias = "e2e-alias-" + Date.now();
+
+  try {
+    const put = await fetch(`http://127.0.0.1:${port}/api/aliases`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serial, alias }),
+    });
+    assert.equal(put.status, 200);
+    const putJson = await put.json();
+    assert.equal(putJson.aliases[serial], alias);
+
+    const statusRes = await fetch(`http://127.0.0.1:${port}/api/status`);
+    const statusJson = await statusRes.json();
+    assert.equal(statusJson.aliases[serial], alias);
+
+    const devicesRes = await fetch(`http://127.0.0.1:${port}/api/devices`);
+    const devicesJson = await devicesRes.json();
+    assert.equal(devicesJson.aliases[serial], alias);
+
+    const getRes = await fetch(`http://127.0.0.1:${port}/api/aliases`);
+    const getJson = await getRes.json();
+    assert.equal(getJson.aliases[serial], alias);
+  } finally {
+    await fetch(`http://127.0.0.1:${port}/api/aliases`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serial, alias: "" }),
+    });
+  }
+});
+
 test("会话启动 → 视频/音频流转发 → 控制消息回写 → 停止", async () => {
   const c = await startSession();
 
